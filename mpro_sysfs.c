@@ -155,8 +155,6 @@ static ssize_t lz4_level_store(struct device *dev,
 		return -EINVAL;
 
 	if (val > 0) {
-		if (mpro->model && mpro->model->margin > 0)
-			return -EOPNOTSUPP;
 
 		if (mpro->model && mpro->model->margin > 0) {
 			dev_warn(&mpro->intf->dev,
@@ -215,6 +213,7 @@ static ssize_t fps_show(struct device *dev,
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
 	u32 period_ns;
+	u64 fps_x100;
 	unsigned long flags;
 
 	spin_lock_irqsave(&mpro->fps_lock, flags);
@@ -224,7 +223,7 @@ static ssize_t fps_show(struct device *dev,
 	if (!period_ns)
 		return sysfs_emit(buf, "0.00\n");
 
-	u64 fps_x100 = div_u64((u64)NSEC_PER_SEC * 100, period_ns);
+	fps_x100 = div_u64((u64)NSEC_PER_SEC * 100, period_ns);
 	return sysfs_emit(buf, "%llu.%02llu\n",
 		fps_x100 / 100, fps_x100 % 100);
 }
