@@ -1,4 +1,4 @@
-# MPro USB Display Driver
+# VoCore MPro USB Display Driver
 
 Linux-kerneliajuri VoCore MPro USB-näytöille (Vendor ID `0xc872`, Product ID
 `0x1004`). Tukee näytön piirtoa DRM/KMS-rajapinnan kautta, taustavalon
