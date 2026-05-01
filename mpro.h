@@ -104,6 +104,7 @@ struct mpro_device {
 
 	/* LZ4 compression */
 	int lz4_level;		/* 0=off, 1=fast, 2..12=HC */
+	int lz4_threshold;	/* threshold when to use or not to use lz4 compression */
 	void *lz4_workmem;
 	size_t lz4_workmem_size;
 	struct mutex lz4_lock;	/* suojaa workmem:in */

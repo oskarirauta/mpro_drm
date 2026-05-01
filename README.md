@@ -154,6 +154,7 @@ Some sample videos can be found from
 | `margin`         | r--  | Frame margin in bytes (0 on most models)                   |
 | `fbdev_enabled`  | r--  | Whether fbdev console emulation is enabled                 |
 | `lz4_level`      | rw   | LZ4 compression: `0`=off, `1`=fast, `2..12`=HC             |
+| `lz4_threshold`  | rw   | LZ4 compression threshold for compression                  |
 | `fps`            | r--  | Measured frames per second sent to the device              |
 | `stats`          | r--  | `submitted=N displayed=N dropped=N fps=N efficiency=N`     |
 | 'reset_stats'    | -w-  | Reset statistic counters by writing 1 to this attribute    |
@@ -204,12 +205,14 @@ libinput debug-events --device /dev/input/eventN
 # /etc/modprobe.d/mpro.conf
 options mpro fbdev=1
 options mpro lz4_level=1
+options mpro lz4_threshold=2048
 ```
 
-| Parameter   | Type | Default | Description                                                                                  |
-| ----------- | ---- | ------- | -------------------------------------------------------------------------------------------- |
-| `fbdev`     | int  | `0`     | Enable fbdev console emulation. Disables USB autosuspend.                                    |
-| `lz4_level` | int  | `0`     | LZ4 compression level at boot. Requires firmware ≥ 0.22 and a non-margin model.              |
+| Parameter       | Type | Default | Description                                                                                  |
+| --------------- | ---- | ------- | -------------------------------------------------------------------------------------------- |
+| `fbdev`         | int  | `0`     | Enable fbdev console emulation. Disables USB autosuspend.                                    |
+| `lz4_level`     | int  | `0`     | LZ4 compression level at boot. Requires firmware ≥ 0.22 and a non-margin model.              |
+| `lz4_threshold` | int  | `1024`  | LZ4 compression threshold, do not compress transfers below this size.                        |
 
 ### `mpro_drm`
 
@@ -233,11 +236,11 @@ exposes how the pipeline is performing:
 
 ```sh
 $ cat /sys/bus/usb/drivers/mpro/3-3:1.0/stats
-submitted=17400 displayed=2900 dropped=14500 fps=46.94 efficiency=31.75%
+submitted=12240 displayed=2040 dropped=10200 fps=34.00 efficiency=16.66%
 ```
 
 In this example the application produced about 289 frames per second,
-but only ~48 fps reached the device — the limit being USB 2.0
+but only ~34 fps reached the device — the limit being USB 2.0
 throughput.
 
 LZ4 compression can significantly improve effective throughput:
@@ -253,6 +256,10 @@ Levels:
 
 LZ4 is not available on margin models (legacy MPRO-5 units) or older
 firmware.
+
+The `lz4_threshold` parameter controls the minimum frame size in bytes
+for LZ4 compression. Frames smaller than this are sent uncompressed
+because the compression overhead outweighs the bandwidth saved.
 
 ## Statistics
 

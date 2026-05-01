@@ -148,6 +148,7 @@ EXPORT_SYMBOL_GPL(mpro_firmware_supports_lz4);
 static bool mpro_lz4_should_compress(struct mpro_device *mpro, size_t len)
 {
 	int level = READ_ONCE(mpro->lz4_level);
+	int threshold = READ_ONCE(mpro->lz4_threshold);
 
 	if (level <= 0)
 		return false;
@@ -157,7 +158,7 @@ static bool mpro_lz4_should_compress(struct mpro_device *mpro, size_t len)
 	if (!mpro_firmware_supports_lz4(mpro))
 		return false;
 
-	return len >= 640;	// Do not compress really small frames
+	return len >= (size_t)threshold; /* Do not compress if size is less than threshold value */
 }
 
 static struct mpro_xfer *mpro_xfer_alloc_compressed(struct mpro_device *mpro,

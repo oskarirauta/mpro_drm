@@ -37,6 +37,13 @@ module_param_named(lz4_level, mpro_lz4_level, int, 0644);
 MODULE_PARM_DESC(lz4_level,
 		 "LZ4 compression: 0=off (default), 1=fast, 2-12=HC levels");
 
+static int mpro_lz4_threshold = 1024;
+module_param_named(lz4_threshold, mpro_lz4_threshold, int, 0644);
+MODULE_PARM_DESC(lz4_threshold,
+	"Minimum frame size in bytes to apply LZ4 compression "
+	"(default: 1024). Frames smaller than this are sent uncompressed "
+	"because the compression overhead outweighs the bandwidth saved.");
+
 /* ------------------------------------------------------------------ */
 /* PM                                                                 */
 /* ------------------------------------------------------------------ */
@@ -281,6 +288,7 @@ static int mpro_usb_probe(struct usb_interface *intf,
 
 	/* --- LZ4 (käyttää firmware-versiota → tämän jälkeen) --- */
 
+	mpro->lz4_threshold = clamp(mpro_lz4_threshold, 0, INT_MAX);
 	ret = mpro_setup_lz4(mpro, intf);
 	if (ret)
 		return ret;

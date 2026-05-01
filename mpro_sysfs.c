@@ -181,6 +181,30 @@ static ssize_t lz4_level_store(struct device *dev,
 
 static DEVICE_ATTR_RW(lz4_level);
 
+static ssize_t lz4_threshold_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", READ_ONCE(mpro->lz4_threshold));
+}
+
+static ssize_t lz4_threshold_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	int val;
+
+	if (kstrtoint(buf, 10, &val) || val < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(mpro->lz4_threshold, val);
+	return count;
+}
+
+static DEVICE_ATTR_RW(lz4_threshold);
+
 static ssize_t firmware_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
@@ -324,6 +348,7 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_margin.attr,
 	&dev_attr_fbdev_enabled.attr,
 	&dev_attr_lz4_level.attr,
+	&dev_attr_lz4_threshold.attr,
 	&dev_attr_firmware.attr,
 	&dev_attr_fw_minor.attr,
 	&dev_attr_fw_major.attr,
