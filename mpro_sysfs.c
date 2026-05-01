@@ -61,14 +61,36 @@ static ssize_t physical_size_show(struct device *dev,
 
 static DEVICE_ATTR_RO(physical_size);
 
-static ssize_t version_show(struct device *dev, struct device_attribute *attr,
+static ssize_t width_mm_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	if (!mpro->model)
+		return sysfs_emit(buf, "-1\n");
+	return sysfs_emit(buf, "%u\n", mpro->model->width_mm);
+}
+
+static DEVICE_ATTR_RO(width_mm);
+
+static ssize_t height_mm_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	if (!mpro->model)
+		return sysfs_emit(buf, "-1\n");
+	return sysfs_emit(buf, "%u\n", mpro->model->height_mm);
+}
+
+static DEVICE_ATTR_RO(height_mm);
+
+static ssize_t version_id_show(struct device *dev, struct device_attribute *attr,
 			    char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
 	return sysfs_emit(buf, "0x%08x\n", mpro->version);
 }
 
-static DEVICE_ATTR_RO(version);
+static DEVICE_ATTR_RO(version_id);
 
 static ssize_t screen_id_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
@@ -188,15 +210,59 @@ static ssize_t fw_major_show(struct device *dev,
 
 static DEVICE_ATTR_RO(fw_major);
 
+static ssize_t fps_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	u32 period_ns;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mpro->fps_lock, flags);
+	period_ns = mpro->ewma_period_ns;
+	spin_unlock_irqrestore(&mpro->fps_lock, flags);
+
+	if (!period_ns)
+		return sysfs_emit(buf, "0.00\n");
+
+	u64 fps_x100 = div_u64((u64)NSEC_PER_SEC * 100, period_ns);
+	return sysfs_emit(buf, "%llu.%02llu\n",
+		fps_x100 / 100, fps_x100 % 100);
+}
+
+static DEVICE_ATTR_RO(fps);
+
 static ssize_t stats_show(struct device *dev,
 			  struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+	u32 submitted, displayed, dropped;
+	u32 efficiency = 0;
+	u32 period_ns;
+	u32 fps_x100 = 0;
+	unsigned long flags;
 
-	return sysfs_emit(buf, "submitted=%d displayed=%d dropped=%d\n",
-			  atomic_read(&mpro->stats_submitted),
-			  atomic_read(&mpro->stats_displayed),
-			  atomic_read(&mpro->stats_dropped));
+	submitted = atomic_read(&mpro->stats_submitted);
+	displayed = atomic_read(&mpro->stats_displayed);
+	dropped   = atomic_read(&mpro->stats_dropped);
+
+	if (submitted > 0)
+		efficiency = (u32)div_u64((u64)displayed * 10000, submitted);
+
+	spin_lock_irqsave(&mpro->fps_lock, flags);
+	period_ns = mpro->ewma_period_ns;
+	spin_unlock_irqrestore(&mpro->fps_lock, flags);
+
+	if (period_ns) {
+		u64 num = (u64)NSEC_PER_SEC * 100;
+		fps_x100 = (u32)div_u64(num, period_ns);
+	}
+
+	return sysfs_emit(buf,
+		"submitted=%u displayed=%u dropped=%u "
+		"fps=%u.%02u efficiency=%u.%02u%%\n",
+		submitted, displayed, dropped,
+		fps_x100 / 100, fps_x100 % 100,
+		efficiency / 100, efficiency % 100);
 }
 
 static DEVICE_ATTR_RO(stats);
@@ -206,7 +272,9 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_description.attr,
 	&dev_attr_resolution.attr,
 	&dev_attr_physical_size.attr,
-	&dev_attr_version.attr,
+	&dev_attr_width_mm.attr,
+	&dev_attr_height_mm.attr,
+	&dev_attr_version_id.attr,
 	&dev_attr_screen_id.attr,
 	&dev_attr_device_id.attr,
 	&dev_attr_margin.attr,
@@ -215,6 +283,7 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_firmware.attr,
 	&dev_attr_fw_minor.attr,
 	&dev_attr_fw_major.attr,
+	&dev_attr_fps.attr,
 	&dev_attr_stats.attr,
 	NULL,
 };

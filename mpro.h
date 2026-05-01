@@ -116,6 +116,11 @@ struct mpro_device {
 	atomic_t stats_submitted;
 	atomic_t stats_displayed;
 	atomic_t stats_dropped;
+
+	/* FPS tracking */
+	atomic64_t last_frame_ns; /* edellisen framen aikaleima */
+	u32 ewma_period_ns;	  /* EWMA jiffies-deltasta */
+	spinlock_t fps_lock;	  /* suojaa ewma:a */
 };
 
 /* ------------------------------------------------------------------ */

@@ -276,17 +276,39 @@ static void mpro_complete_work(struct work_struct *work)
 
 static void mpro_bulk_complete(struct urb *urb)
 {
-	struct mpro_xfer *xfer = urb->context;
-	struct mpro_device *mpro = xfer->mpro;
+    struct mpro_xfer *xfer = urb->context;
+    struct mpro_device *mpro = xfer->mpro;
 
-	if (urb->status && urb->status != -ENOENT &&
-	    urb->status != -ESHUTDOWN && urb->status != -ECONNRESET)
-		dev_dbg(&mpro->intf->dev, "bulk URB status %d\n", urb->status);
+    if (urb->status && urb->status != -ENOENT &&
+        urb->status != -ESHUTDOWN && urb->status != -ECONNRESET)
+        dev_dbg(&mpro->intf->dev, "bulk URB status %d\n", urb->status);
 
-	if (urb->status == 0)
-		atomic_inc(&mpro->stats_displayed);
+    if (urb->status == 0) {
+        u64 now_ns = ktime_get_ns();
+        u64 prev_ns = atomic64_xchg(&mpro->last_frame_ns, now_ns);
 
-	queue_work(mpro->wq, &mpro->complete_work);
+        atomic_inc(&mpro->stats_displayed);
+
+        if (prev_ns) {
+            u64 delta_ns = now_ns - prev_ns;
+            unsigned long flags;
+
+            spin_lock_irqsave(&mpro->fps_lock, flags);
+            if (mpro->ewma_period_ns == 0)
+                mpro->ewma_period_ns = (u32)min_t(u64, delta_ns, U32_MAX);
+            else {
+                /* EWMA α=1/16 */
+                u32 d = (u32)min_t(u64, delta_ns, U32_MAX);
+                mpro->ewma_period_ns =
+                    mpro->ewma_period_ns -
+                    (mpro->ewma_period_ns >> 4) +
+                    (d >> 4);
+            }
+            spin_unlock_irqrestore(&mpro->fps_lock, flags);
+        }
+    }
+
+    queue_work(mpro->wq, &mpro->complete_work);
 }
 
 static void mpro_ctrl_complete(struct urb *urb)
@@ -492,6 +514,9 @@ EXPORT_SYMBOL_GPL(mpro_send_partial_frame);
 void mpro_io_init(struct mpro_device *mpro)
 {
 	spin_lock_init(&mpro->state_lock);
+	spin_lock_init(&mpro->fps_lock);
+	atomic64_set(&mpro->last_frame_ns, 0);
+	mpro->ewma_period_ns = 0;
 	init_usb_anchor(&mpro->anchor);
 	INIT_WORK(&mpro->complete_work, mpro_complete_work);
 	mpro->in_flight = false;
