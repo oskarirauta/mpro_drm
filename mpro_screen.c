@@ -6,15 +6,16 @@
  * notified when DRM's display pipe enters or leaves the active state.
  *
  * Use cases:
- *   - backlight sammutus kun DRM blank
- *   - touch-URBin pysäytys kun näyttö ei ole näkyvissä
+ *   - turn the backlight off when the DRM pipe is blanked
+ *   - stop the touch URB pipeline while the screen is not visible
  *
- * DRM kutsuu mpro_screen_notify_{off,on} pipe-tilan muuttuessa.
+ * DRM calls mpro_screen_notify_{off,on}() when the pipe state changes.
  */
 
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+
 #include "mpro.h"
 
 int mpro_screen_listener_register(struct mpro_device *mpro,
@@ -25,7 +26,6 @@ int mpro_screen_listener_register(struct mpro_device *mpro,
 	mutex_unlock(&mpro->listeners_lock);
 	return 0;
 }
-
 EXPORT_SYMBOL_GPL(mpro_screen_listener_register);
 
 void mpro_screen_listener_unregister(struct mpro_device *mpro,
@@ -38,7 +38,6 @@ void mpro_screen_listener_unregister(struct mpro_device *mpro,
 	list_del(&l->node);
 	mutex_unlock(&mpro->listeners_lock);
 }
-
 EXPORT_SYMBOL_GPL(mpro_screen_listener_unregister);
 
 void mpro_screen_notify_off(struct mpro_device *mpro)
@@ -52,11 +51,10 @@ void mpro_screen_notify_off(struct mpro_device *mpro)
 
 	mutex_lock(&mpro->listeners_lock);
 	list_for_each_entry(l, &mpro->screen_listeners, node)
-	    if (l->screen_off)
-		l->screen_off(l->priv);
+		if (l->screen_off)
+			l->screen_off(l->priv);
 	mutex_unlock(&mpro->listeners_lock);
 }
-
 EXPORT_SYMBOL_GPL(mpro_screen_notify_off);
 
 void mpro_screen_notify_on(struct mpro_device *mpro)
@@ -70,9 +68,8 @@ void mpro_screen_notify_on(struct mpro_device *mpro)
 
 	mutex_lock(&mpro->listeners_lock);
 	list_for_each_entry(l, &mpro->screen_listeners, node)
-	    if (l->screen_on)
-		l->screen_on(l->priv);
+		if (l->screen_on)
+			l->screen_on(l->priv);
 	mutex_unlock(&mpro->listeners_lock);
 }
-
 EXPORT_SYMBOL_GPL(mpro_screen_notify_on);

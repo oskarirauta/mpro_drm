@@ -41,7 +41,7 @@ struct mpro_model_info {
 	u32 margin;
 	/* DRM_MODE_ROTATE_* | DRM_MODE_REFLECT_* */
 	u16 native_rotation;
-	/* Touch-piirin orientaation kompensointi (RAW-vaiheessa) */
+	/* Touch panel orientation compensation, applied to raw coords */
 	bool touch_invert_x;
 	bool touch_invert_y;
 	bool touch_swap_xy;
@@ -52,9 +52,10 @@ struct mpro_model_info {
 /* ------------------------------------------------------------------ */
 
 /*
- * Child-driverit voivat rekisteröidä callback:in joka kutsutaan
- * kun DRM-pipe enable/disable muuttuu. Käytetään esim. backlight:in
- * sammutuksen synkronointiin näytön pimentämiseen.
+ * Child drivers register a listener to be notified when the DRM pipe
+ * transitions between enabled and disabled. Used by the backlight to
+ * follow the display state, and by the touchscreen to stop its URB
+ * pipeline when the screen is blank.
  */
 struct mpro_screen_listener {
 	void (*screen_off)(void *priv);
@@ -87,7 +88,7 @@ struct mpro_device {
 	s16 fw_major;
 	s16 fw_minor;
 
-	/* fbdev-konsoli + autosuspend pois */
+	/* fbdev console mode disables USB autosuspend */
 	bool fbdev_enabled;
 
 	/* Async frame pipeline (mpro_pipeline.c) */
@@ -104,10 +105,10 @@ struct mpro_device {
 
 	/* LZ4 compression */
 	int lz4_level;		/* 0=off, 1=fast, 2..12=HC */
-	int lz4_threshold;	/* threshold when to use or not to use lz4 compression */
+	int lz4_threshold;	/* min frame size to compress */
 	void *lz4_workmem;
 	size_t lz4_workmem_size;
-	struct mutex lz4_lock;	/* suojaa workmem:in */
+	struct mutex lz4_lock;	/* protects workmem */
 
 	/* Screen state notification */
 	struct mutex listeners_lock;
@@ -118,7 +119,7 @@ struct mpro_device {
 	atomic_t stats_displayed;
 	atomic_t stats_dropped;
 
-	/* FPS tracking */
+	/* min frame size to compress */
 	atomic64_t last_frame_ns; /* edellisen framen aikaleima */
 	u32 ewma_period_ns;	  /* EWMA jiffies-deltasta */
 	spinlock_t fps_lock;	  /* suojaa ewma:a */
@@ -139,7 +140,7 @@ int mpro_get_firmware(struct mpro_device *mpro);
 
 /* LZ4 helpers */
 bool mpro_firmware_supports_lz4(const struct mpro_device *mpro);
-int mpro_lz4_workmem_alloc(struct mpro_device *mpro);
+int  mpro_lz4_workmem_alloc(struct mpro_device *mpro);
 
 /*
  * Async frame submission (mpro_pipeline.c) — non-blocking, latest-wins.
@@ -163,11 +164,11 @@ int mpro_sysfs_add(struct mpro_device *mpro);
 
 /* Power management */
 void mpro_autopm_put_interface(struct mpro_device *mpro);
-int mpro_autopm_get_interface(struct mpro_device *mpro);
+int  mpro_autopm_get_interface(struct mpro_device *mpro);
 
 /* Screen state listeners (mpro_screen.c) */
-int mpro_screen_listener_register(struct mpro_device *mpro,
-				  struct mpro_screen_listener *l);
+int  mpro_screen_listener_register(struct mpro_device *mpro,
+				   struct mpro_screen_listener *l);
 void mpro_screen_listener_unregister(struct mpro_device *mpro,
 				     struct mpro_screen_listener *l);
 void mpro_screen_notify_off(struct mpro_device *mpro);

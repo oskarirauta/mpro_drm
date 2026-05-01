@@ -3,7 +3,8 @@
  * mpro_sysfs.c — parent-level sysfs attributes.
  *
  * Exposes device identity (model, screen_id, version, etc.) and
- * pipeline tunables (lz4_level, stats) under the parent's sysfs.
+ * pipeline tunables (lz4_level, lz4_threshold, stats) under the
+ * parent's sysfs.
  *
  * Per-child attributes (rotation, brightness, gamma) live in the
  * respective child driver's sysfs.
@@ -19,115 +20,115 @@ static ssize_t model_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "unknown\n");
 	return sysfs_emit(buf, "%s\n", mpro->model->name);
 }
-
 static DEVICE_ATTR_RO(model);
 
 static ssize_t description_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "unknown\n");
 	return sysfs_emit(buf, "%s\n", mpro->model->description);
 }
-
 static DEVICE_ATTR_RO(description);
 
 static ssize_t resolution_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "unknown\n");
-	return sysfs_emit(buf, "%u %u\n", mpro->model->width,
-			  mpro->model->height);
+	return sysfs_emit(buf, "%u %u\n",
+			  mpro->model->width, mpro->model->height);
 }
-
 static DEVICE_ATTR_RO(resolution);
 
 static ssize_t physical_size_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "unknown\n");
-	return sysfs_emit(buf, "%u %u\n", mpro->model->width_mm,
-			  mpro->model->height_mm);
+	return sysfs_emit(buf, "%u %u\n",
+			  mpro->model->width_mm, mpro->model->height_mm);
 }
-
 static DEVICE_ATTR_RO(physical_size);
 
 static ssize_t width_mm_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "-1\n");
 	return sysfs_emit(buf, "%u\n", mpro->model->width_mm);
 }
-
 static DEVICE_ATTR_RO(width_mm);
 
 static ssize_t height_mm_show(struct device *dev,
 			      struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "-1\n");
 	return sysfs_emit(buf, "%u\n", mpro->model->height_mm);
 }
-
 static DEVICE_ATTR_RO(height_mm);
 
-static ssize_t version_id_show(struct device *dev, struct device_attribute *attr,
-			    char *buf)
+static ssize_t version_id_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "0x%08x\n", mpro->version);
 }
-
 static DEVICE_ATTR_RO(version_id);
 
-static ssize_t screen_id_show(struct device *dev, struct device_attribute *attr,
-			      char *buf)
+static ssize_t screen_id_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "0x%08x\n", mpro->screen);
 }
-
 static DEVICE_ATTR_RO(screen_id);
 
-static ssize_t margin_show(struct device *dev, struct device_attribute *attr,
-			   char *buf)
+static ssize_t margin_show(struct device *dev,
+			   struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	if (!mpro->model)
 		return sysfs_emit(buf, "-1\n");
 	return sysfs_emit(buf, "%u\n", mpro->model->margin);
 }
-
 static DEVICE_ATTR_RO(margin);
 
-static ssize_t device_id_show(struct device *dev, struct device_attribute *attr,
-			      char *buf)
+static ssize_t device_id_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "%*phC\n", (int)sizeof(mpro->id), mpro->id);
 }
-
 static DEVICE_ATTR_RO(device_id);
 
 static ssize_t fbdev_enabled_show(struct device *dev,
-				  struct device_attribute *a, char *buf)
+				  struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "%u\n", mpro->fbdev_enabled ? 1 : 0);
 }
-
 static DEVICE_ATTR_RO(fbdev_enabled);
 
 static ssize_t lz4_level_show(struct device *dev,
@@ -155,7 +156,6 @@ static ssize_t lz4_level_store(struct device *dev,
 		return -EINVAL;
 
 	if (val > 0) {
-
 		if (mpro->model && mpro->model->margin > 0) {
 			dev_warn(&mpro->intf->dev,
 				 "LZ4 is not available on margin device\n");
@@ -178,7 +178,6 @@ static ssize_t lz4_level_store(struct device *dev,
 	WRITE_ONCE(mpro->lz4_level, val);
 	return count;
 }
-
 static DEVICE_ATTR_RW(lz4_level);
 
 static ssize_t lz4_threshold_show(struct device *dev,
@@ -202,34 +201,33 @@ static ssize_t lz4_threshold_store(struct device *dev,
 	WRITE_ONCE(mpro->lz4_threshold, val);
 	return count;
 }
-
 static DEVICE_ATTR_RW(lz4_threshold);
 
 static ssize_t firmware_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "%s\n", mpro->fw_string);
 }
-
 static DEVICE_ATTR_RO(firmware);
 
 static ssize_t fw_minor_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "%d\n", mpro->fw_minor);
 }
-
 static DEVICE_ATTR_RO(fw_minor);
 
 static ssize_t fw_major_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+
 	return sysfs_emit(buf, "%d\n", mpro->fw_major);
 }
-
 static DEVICE_ATTR_RO(fw_major);
 
 static ssize_t fps_show(struct device *dev,
@@ -241,8 +239,11 @@ static ssize_t fps_show(struct device *dev,
 	u64 fps_x100;
 	unsigned long flags;
 
-	/* Aikaleima viimeisestä framesta. Jos siitä on yli 2 sekuntia,
-	 * EWMA-arvo on vanhentunut → näytetään 0. */
+	/*
+	 * The EWMA period is only updated when a frame completes. If no
+	 * frame has been sent for over 2 seconds the value is stale, so
+	 * report 0 instead of a frozen "last seen" rate.
+	 */
 	last_ns = atomic64_read(&mpro->last_frame_ns);
 	if (!last_ns)
 		return sysfs_emit(buf, "0.00\n");
@@ -260,9 +261,8 @@ static ssize_t fps_show(struct device *dev,
 
 	fps_x100 = div_u64((u64)NSEC_PER_SEC * 100, period_ns);
 	return sysfs_emit(buf, "%llu.%02llu\n",
-		fps_x100 / 100, fps_x100 % 100);
+			  fps_x100 / 100, fps_x100 % 100);
 }
-
 static DEVICE_ATTR_RO(fps);
 
 static ssize_t stats_show(struct device *dev,
@@ -283,30 +283,28 @@ static ssize_t stats_show(struct device *dev,
 	if (submitted > 0)
 		efficiency = (u32)div_u64((u64)displayed * 10000, submitted);
 
-	/* Tarkista onko fps vanhentunut */
+	/* Same staleness check as fps_show() */
 	last_ns = atomic64_read(&mpro->last_frame_ns);
 	if (last_ns) {
-
 		now_ns = ktime_get_ns();
 		if (now_ns - last_ns <= 2ULL * NSEC_PER_SEC) {
-
 			spin_lock_irqsave(&mpro->fps_lock, flags);
 			period_ns = mpro->ewma_period_ns;
 			spin_unlock_irqrestore(&mpro->fps_lock, flags);
 
 			if (period_ns)
-				fps_x100 = (u32)div_u64((u64)NSEC_PER_SEC * 100, period_ns);
+				fps_x100 = (u32)div_u64((u64)NSEC_PER_SEC * 100,
+							period_ns);
 		}
 	}
 
 	return sysfs_emit(buf,
-		"submitted=%u displayed=%u dropped=%u "
-		"fps=%u.%02u efficiency=%u.%02u%%\n",
-		submitted, displayed, dropped,
-		fps_x100 / 100, fps_x100 % 100,
-		efficiency / 100, efficiency % 100);
+			  "submitted=%u displayed=%u dropped=%u "
+			  "fps=%u.%02u efficiency=%u.%02u%%\n",
+			  submitted, displayed, dropped,
+			  fps_x100 / 100, fps_x100 % 100,
+			  efficiency / 100, efficiency % 100);
 }
-
 static DEVICE_ATTR_RO(stats);
 
 static ssize_t reset_stats_store(struct device *dev,
@@ -323,7 +321,8 @@ static ssize_t reset_stats_store(struct device *dev,
 		atomic_set(&mpro->stats_submitted, 0);
 		atomic_set(&mpro->stats_displayed, 0);
 		atomic_set(&mpro->stats_dropped, 0);
-		/* fps EWMA nollataan myös */
+
+		/* Clear the EWMA state too — otherwise fps would carry over */
 		atomic64_set(&mpro->last_frame_ns, 0);
 		spin_lock(&mpro->fps_lock);
 		mpro->ewma_period_ns = 0;
@@ -332,7 +331,6 @@ static ssize_t reset_stats_store(struct device *dev,
 
 	return count;
 }
-
 static DEVICE_ATTR_WO(reset_stats);
 
 static struct attribute *mpro_attrs[] = {

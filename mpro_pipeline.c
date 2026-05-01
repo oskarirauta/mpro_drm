@@ -28,29 +28,29 @@
 #define MPRO_CTRL_LEN_COMPRESSED	14
 
 struct screen_command {
-	u8 mode;
-	u8 cmd;
-	u8 size[4];
-	__le16 x, y, w, h;
+	u8	mode;
+	u8	cmd;
+	u8	size[4];
+	__le16	x, y, w, h;
 } __packed;
 
 struct mpro_xfer {
-	struct mpro_device *mpro;
-	bool partial;
+	struct mpro_device	*mpro;
+	bool			partial;
 
-	void *data;
-	dma_addr_t dma;
-	size_t len;
-	bool dma_coherent;
+	void			*data;
+	dma_addr_t		dma;
+	size_t			len;
+	bool			dma_coherent;
 
 	u16 x, y, w, h;
 
-	struct urb *ctrl_urb;
-	struct urb *bulk_urb;
-	struct usb_ctrlrequest dr;
-	struct screen_command cmd;
-	bool compressed;
-	size_t orig_len;
+	struct urb		*ctrl_urb;
+	struct urb		*bulk_urb;
+	struct usb_ctrlrequest	dr;
+	struct screen_command	cmd;
+	bool			compressed;
+	size_t			orig_len;
 };
 
 /* ------------------------------------------------------------------ */
@@ -142,13 +142,11 @@ bool mpro_firmware_supports_lz4(const struct mpro_device *mpro)
 		return true;
 	return false;
 }
-
 EXPORT_SYMBOL_GPL(mpro_firmware_supports_lz4);
 
 static bool mpro_lz4_should_compress(struct mpro_device *mpro, size_t len)
 {
 	int level = READ_ONCE(mpro->lz4_level);
-	int threshold = READ_ONCE(mpro->lz4_threshold);
 
 	if (level <= 0)
 		return false;
@@ -158,7 +156,7 @@ static bool mpro_lz4_should_compress(struct mpro_device *mpro, size_t len)
 	if (!mpro_firmware_supports_lz4(mpro))
 		return false;
 
-	return len >= (size_t)threshold; /* Do not compress if size is less than threshold value */
+	return len >= (size_t)READ_ONCE(mpro->lz4_threshold);
 }
 
 static struct mpro_xfer *mpro_xfer_alloc_compressed(struct mpro_device *mpro,
@@ -176,13 +174,15 @@ static struct mpro_xfer *mpro_xfer_alloc_compressed(struct mpro_device *mpro,
 	if (level <= 0 || !mpro->lz4_workmem)
 		return NULL;
 
-	/* Kvmalloc — iso allokaatio (≈770KB täyskuvalle) joka voi
-	 * epäonnistua tavallisella kmalloc:lla muistin fragmentoituessa */
+	/*
+	 * kvmalloc — the upper bound for a full frame is large (~770KB)
+	 * and a plain kmalloc may fail under memory fragmentation.
+	 */
 	compressed = kvmalloc(compressed_max, GFP_KERNEL);
 	if (!compressed)
 		return NULL;
 
-	/* Lukko: workmem on jaettu, eikä LZ4 ole reentrant */
+	/* workmem is shared and LZ4 is not reentrant */
 	mutex_lock(&mpro->lz4_lock);
 
 	if (level == 1)
@@ -197,7 +197,7 @@ static struct mpro_xfer *mpro_xfer_alloc_compressed(struct mpro_device *mpro,
 	mutex_unlock(&mpro->lz4_lock);
 
 	if (compressed_size <= 0 || compressed_size >= srclen) {
-		/* Ei voittoa tai virhe — fallback raakaan polkuun */
+		/* No win or compressor error — fall back to the raw path */
 		kvfree(compressed);
 		return NULL;
 	}
@@ -327,7 +327,7 @@ static void mpro_ctrl_complete(struct urb *urb)
 		return;
 	}
 
-	/* Submit bulk URB from atomic context — GFP_ATOMIC */
+	/* Submit the bulk URB from atomic context — GFP_ATOMIC */
 	usb_fill_bulk_urb(xfer->bulk_urb, mpro->udev,
 			  usb_sndbulkpipe(mpro->udev, 2),
 			  xfer->dma_coherent ? NULL : xfer->data,
@@ -364,27 +364,25 @@ static int mpro_xfer_submit(struct mpro_xfer *xfer)
 	xfer->cmd.w = cpu_to_le16(xfer->w);
 	xfer->cmd.h = cpu_to_le16(xfer->h);
 
-	/* Command-pituus laitteen protokollassa:
-	 *   full:        6 — mode + cmd + size (4 tavua)
-	 *   partial:    12 — full + x + y + w (jättää h-kentän pois)
+	/*
+	 * Command length on the wire:
+	 *   full:        6 — mode + cmd + size (4 bytes)
+	 *   partial:    12 — full + x + y + w (h omitted)
 	 *   compressed: 14 — full + x + y + w + h
 	 *
-	 * partial:n h-kenttä saadaan pakatusta data:sta tai ei tarvita.
-	 * compressed vaatii kaikki kentät jotta laite osaa purkaa pakkauksen
-	 * oikean alueen yli.
+	 * For partial transfers the device infers h from the data, or
+	 * doesn't need it. For compressed transfers all fields are
+	 * required so the device can decompress into the right region.
 	 */
+	cmd_len = xfer->compressed ? MPRO_CTRL_LEN_COMPRESSED :
+		  xfer->partial    ? MPRO_CTRL_LEN_PARTIAL :
+				     MPRO_CTRL_LEN_FULL;
 
-	cmd_len =
-	    xfer->compressed ? MPRO_CTRL_LEN_COMPRESSED : (xfer->partial ?
-							   MPRO_CTRL_LEN_PARTIAL
-							   :
-							   MPRO_CTRL_LEN_FULL);
-
-	xfer->dr.bRequestType = MPRO_USB_OUT;
-	xfer->dr.bRequest = MPRO_CMD;
-	xfer->dr.wValue = cpu_to_le16(0);
-	xfer->dr.wIndex = cpu_to_le16(0);
-	xfer->dr.wLength = cpu_to_le16(cmd_len);
+	xfer->dr.bRequestType	= MPRO_USB_OUT;
+	xfer->dr.bRequest	= MPRO_CMD;
+	xfer->dr.wValue		= cpu_to_le16(0);
+	xfer->dr.wIndex		= cpu_to_le16(0);
+	xfer->dr.wLength	= cpu_to_le16(cmd_len);
 
 	usb_fill_control_urb(xfer->ctrl_urb, mpro->udev,
 			     usb_sndctrlpipe(mpro->udev, 0),
@@ -457,9 +455,10 @@ int mpro_send_full_frame(struct mpro_device *mpro, const void *data, size_t len)
 
 	if (mpro_lz4_should_compress(mpro, len)) {
 		/*
-		 * LZ4 vaatii cmd_len=14 jossa w,h ovat kuvan todelliset mitat.
-		 * Laite tulkitsee partial(0,0,full_w,full_h) = täyskuva, joten
-		 * lähetämme aina partial-protokollalla kun pakkaus on käytössä.
+		 * LZ4 requires cmd_len=14 with w,h set to the actual frame
+		 * dimensions. The device treats partial(0,0,full_w,full_h)
+		 * as a full frame, so we always use the partial protocol
+		 * when compression is active.
 		 */
 		xfer = mpro_xfer_alloc_compressed(mpro, true, data, len,
 						  0, 0,
@@ -474,7 +473,6 @@ int mpro_send_full_frame(struct mpro_device *mpro, const void *data, size_t len)
 
 	return mpro_send_xfer(mpro, xfer);
 }
-
 EXPORT_SYMBOL_GPL(mpro_send_full_frame);
 
 int mpro_send_partial_frame(struct mpro_device *mpro,
@@ -487,7 +485,7 @@ int mpro_send_partial_frame(struct mpro_device *mpro,
 	if (!mpro || !mpro->model || !data || !w || !h)
 		return -EINVAL;
 
-	/* Protocol quirk: device's y-axis origin is bottom-left */
+	/* Protocol quirk: the device's y-axis origin is bottom-left */
 	fy = (int)mpro->model->height - 1 - (y + h);
 	if (fy < 0)
 		return -EINVAL;
@@ -505,7 +503,6 @@ int mpro_send_partial_frame(struct mpro_device *mpro,
 
 	return mpro_send_xfer(mpro, xfer);
 }
-
 EXPORT_SYMBOL_GPL(mpro_send_partial_frame);
 
 /* ------------------------------------------------------------------ */
@@ -524,7 +521,6 @@ void mpro_io_init(struct mpro_device *mpro)
 	mpro->current_xfer = NULL;
 	mpro->pending_xfer = NULL;
 }
-
 EXPORT_SYMBOL_GPL(mpro_io_init);
 
 void mpro_io_shutdown(struct mpro_device *mpro)
@@ -532,9 +528,11 @@ void mpro_io_shutdown(struct mpro_device *mpro)
 	struct mpro_xfer *cur, *pend;
 	unsigned long flags;
 
-	/* Caller must have set mpro->running = false already so no new
-	 * producers can submit. Now kill any in-flight URBs and drain
-	 * the work queue. */
+	/*
+	 * The caller must have set mpro->running = false already so no
+	 * new submissions can come in. Now kill any in-flight URBs and
+	 * drain the work queue.
+	 */
 	usb_kill_anchored_urbs(&mpro->anchor);
 	cancel_work_sync(&mpro->complete_work);
 
@@ -549,5 +547,4 @@ void mpro_io_shutdown(struct mpro_device *mpro)
 	mpro_xfer_free(cur);
 	mpro_xfer_free(pend);
 }
-
 EXPORT_SYMBOL_GPL(mpro_io_shutdown);

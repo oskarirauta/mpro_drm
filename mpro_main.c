@@ -2,13 +2,13 @@
 /*
  * mpro_main.c — MPro USB display driver, MFD parent.
  *
- * USB-tason perus-ajuri (probe, disconnect, suspend, resume) joka
- * rekisteröi MFD-rakenteen ja kolme lapsi-platform-laitetta:
- * mpro_drm, mpro_touchscreen ja mpro_backlight.
+ * Top-level USB driver (probe, disconnect, suspend, resume) that
+ * registers the MFD framework and three child platform devices:
+ * mpro_drm, mpro_touchscreen and mpro_backlight.
  *
- * Kaikki USB-I/O kulkee tämän moduulin kautta. Lapset käyttävät
- * julkista API:a (mpro.h): mpro_send_full_frame, mpro_send_command,
- * mpro_make_request, jne.
+ * All USB I/O goes through this module. Children use the public API
+ * defined in mpro.h (mpro_send_full_frame, mpro_send_command,
+ * mpro_make_request, etc.) and never touch USB directly.
  */
 
 #include <linux/module.h>
@@ -27,15 +27,15 @@
 static bool mpro_fbdev_enabled;
 module_param_named(fbdev, mpro_fbdev_enabled, bool, 0444);
 MODULE_PARM_DESC(fbdev,
-		 "Enable fbdev console emulation on attached displays (default: 0). "
-		 "When enabled, USB autosuspend is disabled because fbdev keeps "
-		 "the display pipe permanently active. Enable this only if you "
-		 "want the MPro to act as a kernel console.");
+	"Enable fbdev console emulation on attached displays (default: 0). "
+	"When enabled, USB autosuspend is disabled because fbdev keeps "
+	"the display pipe permanently active. Enable this only if you "
+	"want the MPro to act as a kernel console.");
 
 static int mpro_lz4_level;
 module_param_named(lz4_level, mpro_lz4_level, int, 0644);
 MODULE_PARM_DESC(lz4_level,
-		 "LZ4 compression: 0=off (default), 1=fast, 2-12=HC levels");
+	"LZ4 compression: 0=off (default), 1=fast, 2-12=HC levels");
 
 static int mpro_lz4_threshold = 1024;
 module_param_named(lz4_threshold, mpro_lz4_threshold, int, 0644);
@@ -58,9 +58,10 @@ static int mpro_usb_suspend(struct usb_interface *intf, pm_message_t msg)
 	dev_dbg(&intf->dev, "USB suspend\n");
 
 	/*
-	 * "Enter sleep mode" -opcode on dokumentoimaton — laite vain pysähtyy
-	 * USB-tasolla. DRM on jo lähettänyt mustan kuvan ja backlight on
-	 * sammutettu screen_off-listenerin kautta.
+	 * No "enter sleep" opcode is documented — the device simply stops
+	 * at the USB level. By the time we get here the DRM pipe has
+	 * already pushed a black frame and the backlight has been turned
+	 * off through the screen_off listener.
 	 */
 
 	return 0;
@@ -69,16 +70,17 @@ static int mpro_usb_suspend(struct usb_interface *intf, pm_message_t msg)
 static int mpro_usb_resume(struct usb_interface *intf)
 {
 	struct mpro_device *mpro = usb_get_intfdata(intf);
-	u8 wake[6] = { 0x00, 0x29, 0x00, 0x00, 0x00, 0x00 };	/* quit sleep */
 
 	if (!mpro)
 		return 0;
 
 	dev_dbg(&intf->dev, "USB resume\n");
 
-	/* mpro_send_command käyttää usb_control_msg_send:iä joka sallii
-	 * stack-puskurin (sisäinen kmemdup) — ei tarvitse heap-allokointia. */
-	mpro_send_command(mpro, wake, sizeof(wake));
+	/*
+	 * mpro_send_command() uses usb_control_msg_send(), which kmemdups
+	 * the buffer internally — a stack buffer is fine here.
+	 */
+	mpro_send_command(mpro, cmd_quit_sleepmode, sizeof(cmd_quit_sleepmode));
 	return 0;
 }
 
@@ -89,7 +91,6 @@ void mpro_autopm_put_interface(struct mpro_device *mpro)
 
 	usb_autopm_put_interface(mpro->intf);
 }
-
 EXPORT_SYMBOL_GPL(mpro_autopm_put_interface);
 
 int mpro_autopm_get_interface(struct mpro_device *mpro)
@@ -99,7 +100,6 @@ int mpro_autopm_get_interface(struct mpro_device *mpro)
 
 	return usb_autopm_get_interface(mpro->intf);
 }
-
 EXPORT_SYMBOL_GPL(mpro_autopm_get_interface);
 
 /* ------------------------------------------------------------------ */
@@ -107,9 +107,9 @@ EXPORT_SYMBOL_GPL(mpro_autopm_get_interface);
 /* ------------------------------------------------------------------ */
 
 static struct mfd_cell mpro_cells[] = {
-	{.name = "mpro_drm" },
-	{.name = "mpro_touchscreen" },
-	{.name = "mpro_backlight" },
+	{ .name = "mpro_drm" },
+	{ .name = "mpro_touchscreen" },
+	{ .name = "mpro_backlight" },
 };
 
 /* ------------------------------------------------------------------ */
@@ -168,7 +168,6 @@ int mpro_lz4_workmem_alloc(struct mpro_device *mpro)
 		return ret;
 	return 0;
 }
-
 EXPORT_SYMBOL_GPL(mpro_lz4_workmem_alloc);
 
 static int mpro_setup_lz4(struct mpro_device *mpro, struct usb_interface *intf)
@@ -225,18 +224,18 @@ static int mpro_usb_probe(struct usb_interface *intf,
 	if (!mpro)
 		return -ENOMEM;
 
-	mpro->intf = intf;
-	mpro->udev = interface_to_usbdev(intf);
-	mpro->request_delay = 5;
-	mpro->running = false;
-	mpro->fbdev_enabled = mpro_fbdev_enabled;
+	mpro->intf		= intf;
+	mpro->udev		= interface_to_usbdev(intf);
+	mpro->request_delay	= 5;
+	mpro->running		= false;
+	mpro->fbdev_enabled	= mpro_fbdev_enabled;
 
 	mutex_init(&mpro->lock);
 	mutex_init(&mpro->lz4_lock);
 	mutex_init(&mpro->listeners_lock);
 	INIT_LIST_HEAD(&mpro->screen_listeners);
 
-	/* DMA device — child driver buffer-sharing */
+	/* DMA device — used for buffer sharing by child drivers */
 	mpro->dma_dev = usb_intf_get_dma_device(intf);
 	if (mpro->dma_dev) {
 		ret = devm_add_action_or_reset(dev, mpro_dma_dev_release, mpro);
@@ -286,7 +285,7 @@ static int mpro_usb_probe(struct usb_interface *intf,
 			 "Firmware: %s (version parsing failed)\n",
 			 mpro->fw_string);
 
-	/* --- LZ4 (käyttää firmware-versiota → tämän jälkeen) --- */
+	/* --- LZ4 (depends on the firmware version, so set up after probe) --- */
 
 	mpro->lz4_threshold = clamp(mpro_lz4_threshold, 0, INT_MAX);
 	ret = mpro_setup_lz4(mpro, intf);
@@ -301,13 +300,15 @@ static int mpro_usb_probe(struct usb_interface *intf,
 
 	mpro_io_init(mpro);
 
-	/* mpro_io_shutdown + destroy_workqueue automaattisesti
-	 * probe-fail/disconnect-tilanteissa */
+	/*
+	 * mpro_io_shutdown() and destroy_workqueue() run automatically on
+	 * probe failure or disconnect.
+	 */
 	ret = devm_add_action_or_reset(dev, mpro_wq_release, mpro);
 	if (ret)
 		return ret;
 
-	/* Sysfs-attribuutit (devm-pohjaiset jo) */
+	/* sysfs attributes (devm-managed) */
 	ret = mpro_sysfs_add(mpro);
 	if (ret)
 		return dev_err_probe(dev, ret, "sysfs add failed\n");
@@ -315,7 +316,7 @@ static int mpro_usb_probe(struct usb_interface *intf,
 	usb_set_intfdata(intf, mpro);
 	mpro->running = true;
 
-	/* MFD-lapset */
+	/* MFD children */
 	ret = devm_mfd_add_devices(dev, -1, mpro_cells,
 				   ARRAY_SIZE(mpro_cells), NULL, 0, NULL);
 	if (ret) {
@@ -324,7 +325,7 @@ static int mpro_usb_probe(struct usb_interface *intf,
 		return dev_err_probe(dev, ret, "MFD register failed\n");
 	}
 
-	/* Autosuspend (kun fbdev-tila ei ole päällä) */
+	/* Autosuspend, unless fbdev is keeping the pipe permanently on */
 	if (!mpro->fbdev_enabled) {
 		pm_runtime_set_autosuspend_delay(&mpro->udev->dev, 30000);
 		pm_runtime_use_autosuspend(&mpro->udev->dev);
@@ -333,7 +334,7 @@ static int mpro_usb_probe(struct usb_interface *intf,
 		dev_info(dev, "fbdev console mode: USB autosuspend disabled\n");
 	}
 
-	dev_info(dev, "MPRO core registered\n");
+	dev_info(dev, "MPRO MFD driver registered\n");
 	return 0;
 }
 
@@ -347,19 +348,19 @@ static void mpro_usb_disconnect(struct usb_interface *intf)
 		return;
 
 	/*
-	 * Estä uudet lähetykset pipeline:hen. Lapsetkin voivat vielä
-	 * olla kutsumassa meitä omien teardown:iensa aikana — saavat
-	 * -ESHUTDOWN.
+	 * Stop accepting new submissions to the pipeline. Children may
+	 * still call into us during their own teardown — those calls will
+	 * get -ESHUTDOWN.
 	 */
 	spin_lock_irqsave(&mpro->state_lock, flags);
 	mpro->running = false;
 	spin_unlock_irqrestore(&mpro->state_lock, flags);
 
 	/*
-	 * DRM unplug ennen kuin MFD-lapset puretaan. Tämä estää uudet
-	 * DRM-operaatiot mutta jättää mdrm->mpro-viittauksen ennalleen
-	 * — DRM:n oma remove-callback nullaa sen turvallisesti kun
-	 * kaikki callbackit ovat valmistuneet.
+	 * Unplug the DRM device before the MFD children are torn down.
+	 * This blocks any new DRM operations but leaves mdrm->mpro intact
+	 * — the DRM remove callback will clear it once all in-flight
+	 * callbacks have drained.
 	 */
 	mdrm = READ_ONCE(mpro->drm);
 	if (mdrm) {
@@ -372,11 +373,10 @@ static void mpro_usb_disconnect(struct usb_interface *intf)
 	dev_info(&intf->dev, "MPRO disconnected\n");
 
 	/*
-	 * Loput resurssit (workqueue + pipeline shutdown, lz4_workmem,
-	 * dma_dev, MFD-lapset, sysfs) puretaan automaattisesti devres:in
-	 * kautta tämän funktion palautuksen jälkeen, devm_add_action_or_reset
-	 * -kutsujen rekisteröimien funktioiden mukaan. Järjestys on
-	 * käänteinen rekisteröintijärjestyksestä.
+	 * Remaining resources (workqueue + pipeline shutdown, lz4_workmem,
+	 * dma_dev, MFD children, sysfs) are released automatically through
+	 * devres after this function returns, in reverse order of the
+	 * devm_add_action_or_reset() registrations.
 	 */
 }
 
@@ -392,14 +392,14 @@ static const struct usb_device_id id_table[] = {
 MODULE_DEVICE_TABLE(usb, id_table);
 
 static struct usb_driver mpro_usb_driver = {
-	.name = "mpro",
-	.probe = mpro_usb_probe,
-	.disconnect = mpro_usb_disconnect,
-	.suspend = mpro_usb_suspend,
-	.resume = mpro_usb_resume,
-	.reset_resume = mpro_usb_resume,
-	.supports_autosuspend = 1,
-	.id_table = id_table,
+	.name			= "mpro",
+	.probe			= mpro_usb_probe,
+	.disconnect		= mpro_usb_disconnect,
+	.suspend		= mpro_usb_suspend,
+	.resume			= mpro_usb_resume,
+	.reset_resume		= mpro_usb_resume,
+	.supports_autosuspend	= 1,
+	.id_table		= id_table,
 };
 
 module_usb_driver(mpro_usb_driver);
