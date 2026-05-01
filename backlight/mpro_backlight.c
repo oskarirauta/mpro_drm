@@ -2,14 +2,15 @@
 /*
  * mpro_backlight.c — MPro USB display backlight driver.
  *
- * Rekisteröi standardin Linux backlight class -laitteen ja seuraa
- * DRM-puolen pipe enable/disable-tilaa screen state -listener:in
- * kautta. Sisältää ohjelmistollisen gamma-käyrän käyttäjän
- * havaitseman kirkkauden lineaarisemmaksi tekemiseen.
+ * Registers a standard Linux backlight class device and tracks the
+ * DRM-side pipe enable/disable state through a screen state listener.
+ * Includes a software gamma curve that makes the perceived brightness
+ * change more linearly across the 0..255 range.
  *
- * Laitteella ei ole readback:iä taustavalon arvolle, joten asetamme
- * oletusarvon probe-vaiheessa. Oletusarvon voi konfiguroida
- * default_brightness-parametrillä; gamma vastaavasti default_gamma:lla.
+ * The device has no readback for the current backlight level, so a
+ * default value is sent on probe. The default can be configured with
+ * the default_brightness module parameter; gamma likewise via
+ * default_gamma.
  */
 
 #include <linux/module.h>
@@ -38,7 +39,7 @@ module_param_named(default_gamma, mpro_bl_default_gamma, int, 0444);
 MODULE_PARM_DESC(default_gamma,
 	"Initial gamma curve, multiplied by 100 (50..400, default "
 	__stringify(MPRO_BL_GAMMA_DEFAULT) " = 1.00 linear). "
-	"Higher values make low brightness perceive smoother. "
+	"Higher values make low brightness levels feel smoother. "
 	"Can be set on the kernel command line: "
 	"mpro_backlight.default_gamma=N");
 
@@ -49,10 +50,10 @@ MODULE_PARM_DESC(default_gamma,
 /*
  * y = round(255 * (x/255)^(g_x100/100))
  *
- * Sama kaava kuin mpro_drm_color.c:n mpro_drm__pow_lut, duplikoitu
- * jotta backlight on itsenäinen DRM-moduulista (eivät ole pakollisia
- * rinnakkain). Kaava on niin lyhyt että jaettu header ei ole vaivan
- * arvoinen.
+ * Same formula as mpro_drm__pow_lut() in mpro_drm_color.c, duplicated
+ * so the backlight module is independent of the DRM module (they are
+ * not required to be loaded together). The formula is short enough
+ * that a shared header is not worth the cross-module dependency.
  */
 static u8 mpro_bl__pow_curve(u32 x, u32 g_x100)
 {
@@ -81,12 +82,14 @@ static u8 mpro_bl__pow_curve(u32 x, u32 g_x100)
 }
 
 /*
- * Sovella gamma-käyrää raw-arvolle ennen laitteelle lähetystä.
- * raw 0..255 -> device 0..255, jossa device = 255 * (raw/255)^(gamma/100).
+ * Apply the gamma curve to a raw value before sending it to the device.
+ *   raw 0..255 -> device 0..255
+ *   device = 255 * (raw/255)^(gamma/100)
  *
- * Silmä havaitsee kirkkautta logaritmisesti, joten lineaarinen 0..255
- * tuntuu siltä että matalat arvot eivät tee mitään ja sitten yhtäkkiä
- * on kirkasta. Gamma > 1 antaa pehmeämmän käyrän matalille arvoille.
+ * Human perception of brightness is roughly logarithmic, so a linear
+ * 0..255 ramp feels like nothing happens at low values and then
+ * brightness jumps suddenly. gamma > 1 produces a smoother curve at
+ * the dark end.
  */
 static u8 mpro_bl__curve(struct mpro_backlight *mb, u8 raw)
 {
@@ -105,13 +108,13 @@ static u8 mpro_bl__curve(struct mpro_backlight *mb, u8 raw)
 static int mpro_bl__send_value(struct mpro_backlight *mb, u8 raw)
 {
 	/*
-	 * Backlight-komennon layout (USB control transferiin sopiva 8 tavua):
-	 *   [0] = 0x00 (reserved)
-	 *   [1] = 0x51 (komento-byte)
-	 *   [2] = 0x02 (alikomento: backlight)
-	 *   [3..5] = nolla
-	 *   [6] = brightness 0..255 (gamma-korjattu)
-	 *   [7] = nolla
+	 * Backlight command layout (8 bytes, fits a USB control transfer):
+	 *   [0]    = 0x00 (reserved)
+	 *   [1]    = 0x51 (command byte)
+	 *   [2]    = 0x02 (sub-command: backlight)
+	 *   [3..5] = 0
+	 *   [6]    = brightness 0..255 (gamma-corrected)
+	 *   [7]    = 0
 	 */
 	u8 cmd[8] = { 0x00, 0x51, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
 	u8 device_value = mpro_bl__curve(mb, raw);
@@ -253,14 +256,14 @@ static int mpro_bl__probe(struct platform_device *pdev)
 	};
 	struct mpro_backlight *mb;
 	char name[64];
-	u8 initial_brightness;
+	u8  initial_brightness;
 	u32 initial_gamma;
 	int ret;
 
 	if (!mpro)
 		return -ENODEV;
 
-	/* Validoi parametrit; clampataan turvallisiin rajoihin */
+	/* Validate the module parameters; clamp to safe ranges */
 	if (mpro_bl_default_brightness < 0 ||
 	    mpro_bl_default_brightness > MPRO_BL_MAX) {
 		dev_warn(dev,
@@ -314,7 +317,7 @@ static int mpro_bl__probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "screen listener register failed\n");
 
-	/* Aseta laite oletusarvoon — laitteella ei ole readback:iä */
+	/* Push the initial value — the device has no readback */
 	mpro_bl__send_value(mb, initial_brightness);
 
 	ret = sysfs_create_group(&pdev->dev.kobj, &mpro_bl__attr_group);
@@ -340,7 +343,7 @@ static void mpro_bl__remove(struct platform_device *pdev)
 
 	sysfs_remove_group(&pdev->dev.kobj, &mpro_bl__attr_group);
 	mpro_screen_listener_unregister(mb->mpro, &mb->listener);
-	/* devm hoitaa backlight_device_unregister:n */
+	/* devm releases backlight_device_unregister() */
 }
 
 static struct platform_driver mpro_bl__driver = {
