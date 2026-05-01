@@ -19,6 +19,18 @@
 #include "mpro_backlight.h"
 
 /* ------------------------------------------------------------------ */
+/* Module parameters                                                  */
+/* ------------------------------------------------------------------ */
+
+static int mpro_bl_default = MPRO_BL_DEFAULT;
+module_param_named(default_brightness, mpro_bl_default, int, 0444);
+MODULE_PARM_DESC(default_brightness,
+	"Initial backlight brightness on probe (0..255, default "
+	__stringify(MPRO_BL_DEFAULT) "). The device has no readback for "
+	"the current brightness, so this value is sent on each probe. "
+	"Can be set on the kernel command line: mpro_backlight.default_brightness=N");
+
+/* ------------------------------------------------------------------ */
 /* Gamma curve                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -227,14 +239,25 @@ static int mpro_bl__probe(struct platform_device *pdev)
 		.type = BACKLIGHT_RAW,
 		.scale = BACKLIGHT_SCALE_LINEAR,
 		.max_brightness = MPRO_BL_MAX,
-		.brightness = MPRO_BL_DEFAULT,
+		.brightness = mpro_bl_default,
 	};
 	struct mpro_backlight *mb;
 	char name[64];
 	int ret;
+	u8 initial;
 
 	if (!mpro)
 		return -ENODEV;
+
+	/* Validoi parametri — clampataan turvalliseen rajaan */
+	if (mpro_bl_default < 0 || mpro_bl_default > MPRO_BL_MAX) {
+		dev_warn(dev,
+			 "default_brightness=%d invalid, clamping to 0..%u\n",
+			 mpro_bl_default, MPRO_BL_MAX);
+		mpro_bl_default = clamp(mpro_bl_default, 0, MPRO_BL_MAX);
+	}
+
+	initial = (u8)mpro_bl_default;
 
 	mb = devm_kzalloc(dev, sizeof(*mb), GFP_KERNEL);
 	if (!mb)
@@ -242,7 +265,7 @@ static int mpro_bl__probe(struct platform_device *pdev)
 
 	mb->mpro = mpro;
 	mb->screen_on = true;
-	mb->stored_value = MPRO_BL_DEFAULT;
+	mb->stored_value = initial;
 	mb->gamma_x100 = MPRO_BL_GAMMA_DEFAULT;
 	mutex_init(&mb->lock);
 
@@ -266,7 +289,7 @@ static int mpro_bl__probe(struct platform_device *pdev)
 				     "screen listener register failed\n");
 
 	/* Aseta laite oletusarvoon — laitteella ei ole readback:iä */
-	mpro_bl__send_value(mb, MPRO_BL_DEFAULT);
+	mpro_bl__send_value(mb, initial);
 
 	ret = sysfs_create_group(&pdev->dev.kobj, &mpro_bl__attr_group);
 	if (ret) {
