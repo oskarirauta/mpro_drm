@@ -2,4 +2,6 @@ tests
 *.o
 *.ko
 *.mod
+*.mod.c
 *.mod.o
+modules.order
