@@ -254,6 +254,14 @@ Levels:
 LZ4 is not available on margin models (legacy MPRO-5 units) or older
 firmware.
 
+## Statistics
+
+Pipeline statistics can be resetted with
+
+```sh
+echo 1 > /sys/bus/usb/drivers/mpro/3-3:1.0/reset_stats
+```
+
 ## Power management
 
 The driver supports USB autosuspend. The device suspends automatically
