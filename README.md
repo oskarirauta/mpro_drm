@@ -84,10 +84,15 @@ mpro_backlight		12288	0
 mpro_drm		28672	0
 mpro			40960	3 mpro_touchscreen,mpro_backlight,mpro_drm
 
-mpro: Detected MPro 6.8"
-mpro_drm: [drm] fb1: mprodrmfb frame buffer device
-mpro_backlight: backlight registered: mpro-3-3 (default 128/255)
-mpro_touchscreen: touchscreen registered (800x480, 2-finger MT)
+mpro 3-3:1.0: Detected MPRO 6.8"
+mpro 3-3:1.0: Firmware: v0.25, 800x480, VOCORE-6.8IN-SCREEN
+mpro 3-3:1.0: USB autosuspend enabled (delay 30s)
+mpro 3-3:1.0: MPRO core registered
+usbcore: registered new interface driver mpro
+[drm] Initialized mpro_drm 1.0.0 for mpro_drm on minor 1
+mpro_backlight mpro_backlight: backlight registered: mpro-3-3:1.0 (default 100/255)
+input: MPro touchscreen as /devices/pci0000:00/0000:00:05.0/usb3/3-3/3-3:1.0/mpro_touchscreen/input/input16
+mpro_touchscreen mpro_touchscreen: touchscreen registered (800x480, 2-finger MT)
 ```
 
 ### Konsoli (fbcon)
@@ -137,8 +142,8 @@ hyvin sopivia videoita.
 | `model`          | r--    | Mallin lyhyt nimi (esim. `MPRO-6IN8`) |
 | `description`    | r--    | Mallin kuvaus |
 | `firmware`       | r--    | Firmware |
-| `fw_minor`       | r--    | Firmware version numeron minor osa |
 | `fw_major`       | r--    | Firmware version numeron major osa |
+| `fw_minor`       | r--    | Firmware version numeron minor osa |
 | `resolution`     | r--    | `WIDTH HEIGHT` |
 | `physical_size`  | r--    | `WIDTH_MM HEIGHT_MM` |
 | `width_mm`       | r--    | `WIDTH_MM` |
@@ -151,6 +156,8 @@ hyvin sopivia videoita.
 | `lz4_level`      | rw     | LZ4-pakkaus: `0`=pois, `1`=fast, `2..12`=HC |
 | `fps`            | r--    | toteutunut fps |
 | `stats`          | r--    | `submitted=N displayed=N dropped=N fps=N efficiency=N` |
+
+statistiikan fps on EWMA-lähteestä ja efficiency on prosentteina.
 
 ### DRM (`/sys/bus/platform/drivers/mpro_drm/<id>/`)
 
