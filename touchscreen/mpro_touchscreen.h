@@ -2,7 +2,7 @@
 /*
  * MPro touchscreen driver — internal header.
  *
- * Wire-protocol struct määrittelyt ja per-instanssin tila.
+ * Wire-protocol struct definitions and per-instance state.
  */
 #ifndef _MPRO_TOUCHSCREEN_H_
 #define _MPRO_TOUCHSCREEN_H_ 1
@@ -11,6 +11,7 @@
 #include <linux/input.h>
 #include <linux/mutex.h>
 #include <linux/timer.h>
+
 #include "../mpro.h"
 
 #define MPRO_TOUCH_PKT_SIZE	14
@@ -19,29 +20,30 @@
 #define MPRO_TOUCH_INTERVAL_MS	8	/* USB bInterval (~125 Hz) */
 
 /*
- * Release-watchdog timeout: kuinka kauan odotetaan ilman paketteja
- * ennen oletusta että kaikki sormet on poistettu. Normaalisti firmware
- * lähettää state=1-paketin sormen nousessa, joten release tapahtuu
- * välittömästi — tämä on vain turvaverkko firmware-bugeja ja
- * pakettihäviöitä varten.
+ * Release watchdog timeout: how long to wait without packets before
+ * assuming all fingers have been lifted. Normally the firmware sends
+ * a state=1 packet on finger release, so the release happens
+ * immediately — this watchdog is only a safety net for firmware bugs
+ * and dropped USB packets.
  */
 #define MPRO_TOUCH_RELEASE_WATCHDOG_MS	850
 
 /*
- * Touch-paketin layout — vrt. struct touch + struct point libusb-koodissa.
+ * Touch packet layout — corresponds to struct touch + struct point in
+ * the libusb reference code.
  *
- * Bitfield-tulkinta:
+ * Bitfield interpretation:
  *   xh: high 4 bits of x | 2 reserved | 2 bits state
- *   yh: high 4 bits of y | 4 bits slot id (0..1, > 1 = ei käytössä)
+ *   yh: high 4 bits of y | 4 bits slot id (0..1; > 1 = unused)
  *
- * 12-bittiset koordinaatit yhdistetään: x = (xh.h << 8) | xl
+ * 12-bit coordinates are reassembled as: x = (xh.h << 8) | xl
  *
- * State-koodien semantiikka (USB-protokolla-analyysillä firmware v0.25,
- * vrt. eroavaisuus alkuperäisestä userspace-koodista):
- *   0 = uuden kosketuksen aloitusmerkki
- *   1 = release (sormi nostettu)
- *   2 = aktiivinen kosketus (sormi näytöllä, koordinaatit valideja)
- *   3 = ei havaittu käytössä
+ * State code semantics, as observed on firmware v0.25 by USB-protocol
+ * analysis (note: differs from the original userspace assumption):
+ *   0 = touch start marker
+ *   1 = release (finger lifted)
+ *   2 = active touch (finger on screen, coordinates valid)
+ *   3 = not observed in use
  */
 union mpro_axis {
 	struct {
@@ -61,34 +63,34 @@ struct mpro_touch_point {
 	u8 xl;
 	union mpro_axis yh;
 	u8 yl;
-	u8 weight;		/* TODO: ehkä ABS_MT_PRESSURE jos validi */
+	u8 weight;	/* TODO: report as ABS_MT_PRESSURE if validated */
 	u8 misc;
 } __packed;
 
 struct mpro_touch_packet {
 	u8 unused[2];
-	u8 count;		/* TODO: tutki onko hyödynnettävissä */
+	u8 count;	/* TODO: investigate whether usable */
 	struct mpro_touch_point p[MPRO_TOUCH_MAX_SLOTS];
 } __packed;
 
 struct mpro_touch {
-	struct mpro_device *mpro;
-	struct input_dev *input;
-	struct mpro_screen_listener listener;
+	struct mpro_device		*mpro;
+	struct input_dev		*input;
+	struct mpro_screen_listener	listener;
 
-	/* IRQ-URB resources */
-	struct urb *urb;
-	void *buf;
-	dma_addr_t buf_dma;
+	/* Interrupt URB resources */
+	struct urb			*urb;
+	void				*buf;
+	dma_addr_t			buf_dma;
 
-	struct mutex lock;
-	bool opened;		/* userspace open() */
-	bool screen_on;		/* DRM pipe state */
-	bool submitted;		/* URB liikkeellä */
+	struct mutex			lock;
+	bool				opened;		/* userspace open() */
+	bool				screen_on;	/* DRM pipe state */
+	bool				submitted;	/* URB in flight */
 
-	/* Release-watchdog turvaverkkona firmware-state=1-pakettia varten */
-	struct timer_list release_timer;
-	bool any_active;
+	/* Release watchdog — safety net for a missing state=1 packet */
+	struct timer_list		release_timer;
+	bool				any_active;
 };
 
 #endif /* _MPRO_TOUCHSCREEN_H_ */

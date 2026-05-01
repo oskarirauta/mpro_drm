@@ -2,14 +2,13 @@
 /*
  * mpro_touchscreen.c — MPro USB touchscreen driver.
  *
- * Lukee 14-tavuisia touch-paketteja interrupt-endpointista 0x81.
- * Tukee 2 yhtäaikaista kosketuspistettä. Seuraa DRM-puolen rotaatiota
- * koordinaattimuunnoksessa, ja per-mallin kalibrointiflagit
- * (touch_invert_x/y, touch_swap_xy) sovelletaan RAW-vaiheessa ennen
- * rotation:ia.
+ * Reads 14-byte touch packets from interrupt endpoint 0x81. Supports
+ * two simultaneous touch points. Tracks the DRM-side rotation for
+ * coordinate transformation, and applies per-model calibration flags
+ * (touch_invert_x/y, touch_swap_xy) at the raw stage before rotation.
  *
- * URB pyörii vain kun userspace on avannut input-laitteen JA DRM-pipe
- * on aktiivinen — kummankin ehdon vapautuminen pysäyttää sen.
+ * The URB only runs while userspace has the input device open AND the
+ * DRM pipe is active — releasing either of those conditions stops it.
  */
 
 #include <linux/module.h>
@@ -20,6 +19,7 @@
 #include <linux/slab.h>
 
 #include <drm/drm_blend.h>
+
 #include "../drm/mpro_drm.h"
 #include "mpro_touchscreen.h"
 
@@ -35,9 +35,10 @@ static u16 mpro_ts__get_rotation(struct mpro_touch *mt)
 }
 
 /*
- * Muunna laite-koordinaatit DRM-koordinaateiksi rotaation mukaan.
- * Laitteen natiiviresoluutio on (model->width, model->height); DRM:n
- * näkyvä resoluutio voi olla swappiina rotation 90/270 kanssa.
+ * Convert device coordinates to DRM coordinates according to the
+ * current rotation. The device's native resolution is
+ * (model->width, model->height); the DRM-visible resolution may be
+ * swapped for ROTATE_90 / ROTATE_270.
  */
 static void mpro_ts__rotate(struct mpro_touch *mt, u16 *x, u16 *y)
 {
@@ -84,7 +85,7 @@ static void mpro_ts__release_timeout(struct timer_list *t)
 	int i;
 
 	dev_dbg(&mt->mpro->intf->dev,
-		"release timeout — vapautetaan kaikki sormet\n");
+		"release timeout — releasing all fingers\n");
 
 	for (i = 0; i < MPRO_TOUCH_MAX_SLOTS; i++) {
 		input_mt_slot(input, i);
@@ -114,41 +115,41 @@ static void mpro_ts__handle_packet(struct mpro_touch *mt,
 		u8 slot, state;
 		bool active;
 
-		slot = p->yh.y.id;
+		slot  = p->yh.y.id;
 		state = p->xh.x.f;
 
-		/* Slot >= MPRO_TOUCH_MAX_SLOTS: ei käytössä */
+		/* Slot >= MPRO_TOUCH_MAX_SLOTS means "unused" */
 		if (slot >= MPRO_TOUCH_MAX_SLOTS)
 			continue;
 
-		x = ((u16) p->xh.x.h << 8) | p->xl;
-		y = ((u16) p->yh.y.h << 8) | p->yl;
+		x = ((u16)p->xh.x.h << 8) | p->xl;
+		y = ((u16)p->yh.y.h << 8) | p->yl;
 
-		/* Touch-piirin orientaation kompensointi (RAW-vaihe) */
+		/* Touch panel orientation compensation, raw stage */
 		if (model->touch_swap_xy) {
 			u16 t = x;
+
 			x = y;
 			y = t;
 		}
 		if (model->touch_invert_x)
-			x = model->width - 1 - x;
+			x = model->width  - 1 - x;
 		if (model->touch_invert_y)
 			y = model->height - 1 - y;
 
 		/*
-		 * State-koodit firmware v0.25 (vrt. eroavaisuus
-		 * alkuperäisestä userspace-koodista, varmistettu
-		 * USB-protokolla-analyysillä):
+		 * State codes on firmware v0.25 (verified by USB-protocol
+		 * analysis; differs from the original userspace assumption):
 		 *
-		 *   0 = uuden kosketuksen aloitusmerkki
-		 *       (koordinaatit voivat olla vanhentuneita)
-		 *   1 = release (sormi nostettu, koordinaatit hylätään)
-		 *   2 = aktiivinen kosketus / drag (koordinaatit valideja)
-		 *   3 = ei havaittu käytössä
+		 *   0 = touch start marker
+		 *       (coordinates may be stale)
+		 *   1 = release (finger lifted, coordinates discarded)
+		 *   2 = active touch / drag (coordinates valid)
+		 *   3 = not observed in use
 		 *
-		 * Vain state=2 raportoi todellista kosketusta. State=1
-		 * triggeröi automaattisen release:n input_mt_sync_frame:n
-		 * kautta kun active=false.
+		 * Only state=2 reports an actual touch. state=1 triggers
+		 * the automatic release through input_mt_sync_frame()
+		 * because active=false.
 		 */
 		active = (state == 2);
 
@@ -172,12 +173,12 @@ static void mpro_ts__handle_packet(struct mpro_touch *mt,
 	input_sync(input);
 
 	/*
-	 * Release-watchdog: firmware lähettää state=1-paketin sormen
-	 * lähdössä, mikä vapauttaa kosketuksen välittömästi tämän
-	 * funktion sisällä. Watchdog-timer on turvaverkko sille
-	 * tilanteelle, että firmware-bugin tai USB-pakettihäviön
-	 * vuoksi state=1 ei tule lainkaan — tällöin sormi vapautuu
-	 * MPRO_TOUCH_RELEASE_WATCHDOG_MS-viiveen jälkeen.
+	 * Release watchdog: the firmware sends a state=1 packet when a
+	 * finger is lifted, which releases the touch immediately above.
+	 * The watchdog timer is only a safety net for the case where a
+	 * firmware bug or a dropped USB packet causes state=1 to never
+	 * arrive — in that case the finger is released after
+	 * MPRO_TOUCH_RELEASE_WATCHDOG_MS.
 	 */
 	if (any_active) {
 		mt->any_active = true;
@@ -185,7 +186,7 @@ static void mpro_ts__handle_packet(struct mpro_touch *mt,
 			  jiffies +
 			  msecs_to_jiffies(MPRO_TOUCH_RELEASE_WATCHDOG_MS));
 	} else if (mt->any_active) {
-		/* Paketti vahvisti release:n itse → ei tarvita timeria */
+		/* Packet itself confirmed the release — no timer needed */
 		timer_delete(&mt->release_timer);
 		mt->any_active = false;
 	}
@@ -210,13 +211,15 @@ static void mpro_ts__irq_complete(struct urb *urb)
 	case -ECONNRESET:
 	case -ESHUTDOWN:
 	case -EPROTO:
-		/* Fatal: laite irti, suspend, tai protokollavirhe.
-		 * Älä resubmit — uusi käynnistys vasta resync:in kautta. */
+		/*
+		 * Fatal: device gone, suspend, or protocol error.
+		 * Do not resubmit — restart goes through resync().
+		 */
 		mt->submitted = false;
 		return;
 
 	default:
-		/* Tilapäinen virhe (esim. -EILSEQ CRC) — yritetään uudelleen */
+		/* Transient error (e.g. -EILSEQ CRC) — try again */
 		dev_dbg(&mt->mpro->intf->dev,
 			"touch URB status %d, retrying\n", urb->status);
 		break;
@@ -262,8 +265,8 @@ static void mpro_ts__stop(struct mpro_touch *mt)
 }
 
 /*
- * Käynnistys/pysäytys: URB pyörii kun (opened && screen_on),
- * muuten pysähtyy. Kutsutaan kummankin ehdon muuttuessa.
+ * Start/stop gate: the URB runs while (opened && screen_on), and stops
+ * otherwise. Called whenever either condition changes.
  */
 static void mpro_ts__resync(struct mpro_touch *mt)
 {
@@ -308,10 +311,10 @@ static void mpro_ts__input_close(struct input_dev *input)
 	mpro_ts__resync(mt);
 
 	/*
-	 * Pysäytä release-timer ja vapauta MT-tila. Tämä varmistaa
-	 * että seuraava input_open alkaa puhtaalta pöydältä, vaikka
-	 * edellinen client (esim. Weston) olisi sulkeutunut
-	 * epäsiististi keskellä kosketusta.
+	 * Stop the release timer and clear MT state. This makes sure the
+	 * next input_open() starts from a clean slate, even if the
+	 * previous client (e.g. Weston) closed mid-touch without
+	 * releasing first.
 	 */
 	timer_delete_sync(&mt->release_timer);
 
@@ -377,7 +380,7 @@ static int mpro_ts__probe(struct platform_device *pdev)
 	mutex_init(&mt->lock);
 	timer_setup(&mt->release_timer, mpro_ts__release_timeout, 0);
 
-	/* IRQ-buffer + URB */
+	/* Interrupt buffer + URB */
 	mt->urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!mt->urb)
 		return -ENOMEM;
@@ -406,28 +409,27 @@ static int mpro_ts__probe(struct platform_device *pdev)
 	mt->input = input;
 	input_set_drvdata(input, mt);
 
-	input->name = "MPro touchscreen";
-	input->id.bustype = BUS_USB;
-	input->id.vendor = 0xc872;
-	input->id.product = 0x1004;
-	input->open = mpro_ts__input_open;
-	input->close = mpro_ts__input_close;
-	input->dev.parent = dev;
+	input->name		= "MPro touchscreen";
+	input->id.bustype	= BUS_USB;
+	input->id.vendor	= 0xc872;
+	input->id.product	= 0x1004;
+	input->open		= mpro_ts__input_open;
+	input->close		= mpro_ts__input_close;
+	input->dev.parent	= dev;
 
 	input_set_capability(input, EV_KEY, BTN_TOUCH);
 	input_set_abs_params(input, ABS_MT_POSITION_X,
-			     0, mpro->model->width - 1, 0, 0);
+			     0, mpro->model->width  - 1, 0, 0);
 	input_set_abs_params(input, ABS_MT_POSITION_Y,
 			     0, mpro->model->height - 1, 0, 0);
 
 	/*
-	 * INPUT_MT_DIRECT — kosketusnäyttö (suora kosketus, ei trackpad).
+	 * INPUT_MT_DIRECT — touchscreen (direct touch, not a trackpad).
 	 *
-	 * INPUT_MT_DROP_UNUSED on tarkoituksella jätetty pois: firmware
-	 * ei aina lähetä molempia slot-tietoja jokaisessa paketissa, ja
-	 * DROP_UNUSED-flag voisi vapauttaa aktiivisen sloten vahingossa.
-	 * Release hoidetaan eksplisiittisesti state=1-paketilla ja
-	 * watchdog-timerilla.
+	 * INPUT_MT_DROP_UNUSED is deliberately omitted: the firmware does
+	 * not always report both slots in every packet, and DROP_UNUSED
+	 * could release an active slot by accident. Releases are handled
+	 * explicitly through the state=1 packet and the watchdog timer.
 	 */
 	ret = input_mt_init_slots(input, MPRO_TOUCH_MAX_SLOTS, INPUT_MT_DIRECT);
 	if (ret)
@@ -438,9 +440,9 @@ static int mpro_ts__probe(struct platform_device *pdev)
 		goto err_buf;
 
 	/* Screen state listener */
-	mt->listener.screen_off = mpro_ts__screen_off;
-	mt->listener.screen_on = mpro_ts__screen_on;
-	mt->listener.priv = mt;
+	mt->listener.screen_off	= mpro_ts__screen_off;
+	mt->listener.screen_on	= mpro_ts__screen_on;
+	mt->listener.priv	= mt;
 
 	ret = mpro_screen_listener_register(mpro, &mt->listener);
 	if (ret)
@@ -449,7 +451,8 @@ static int mpro_ts__probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, mt);
 
 	dev_info(dev, "touchscreen registered (%ux%u, %d-finger MT)\n",
-		 mpro->model->width, mpro->model->height, MPRO_TOUCH_MAX_SLOTS);
+		 mpro->model->width, mpro->model->height,
+		 MPRO_TOUCH_MAX_SLOTS);
 	return 0;
 
 err_buf:
@@ -467,16 +470,16 @@ static void mpro_ts__remove(struct platform_device *pdev)
 	if (!mt)
 		return;
 
-	/* Estä screen state -callbackit ennen URB-purkua */
+	/* Block screen-state callbacks before tearing down the URB */
 	mpro_screen_listener_unregister(mt->mpro, &mt->listener);
 
 	timer_delete_sync(&mt->release_timer);
 	mpro_ts__stop(mt);
 
 	/*
-	 * NULL-ataan viittaukset ennen vapautusta. Jos input_close
-	 * laukeaa devm-purussa tämän jälkeen ja kutsuu mpro_ts__stop:ia,
-	 * NULL-tarkistus estää use-after-free:n.
+	 * Null the references before freeing. If input_close() runs from
+	 * the devm teardown after this point and reaches mpro_ts__stop(),
+	 * the NULL check there prevents a use-after-free.
 	 */
 	usb_free_coherent(mt->mpro->udev, MPRO_TOUCH_PKT_SIZE,
 			  mt->buf, mt->buf_dma);
@@ -485,13 +488,13 @@ static void mpro_ts__remove(struct platform_device *pdev)
 	usb_free_urb(mt->urb);
 	mt->urb = NULL;
 
-	/* devm_input_*: rekisteröinti puretaan automaattisesti */
+	/* devm_input_*: the registration is released automatically */
 }
 
 static struct platform_driver mpro_ts__driver = {
-	.probe = mpro_ts__probe,
-	.remove = mpro_ts__remove,
-	.driver = {.name = "mpro_touchscreen" },
+	.probe	= mpro_ts__probe,
+	.remove	= mpro_ts__remove,
+	.driver	= { .name = "mpro_touchscreen" },
 };
 
 module_platform_driver(mpro_ts__driver);
