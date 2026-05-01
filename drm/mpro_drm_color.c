@@ -2,13 +2,14 @@
 /*
  * mpro_drm_color.c — color management & pixel-format conversion.
  *
- * Sisältää:
- *   - gamma-LUT-laskenta (mpro_pow_lut, mpro_drm__build_power_lut)
- *   - yhdistetty gamma+brightness LUT (mpro_drm__rebuild_combined_lut)
- *   - DRM-puolen color_mgmt sync (mpro_drm__apply_color_mgmt)
- *   - pikseliformaatti-konversio + LUT-haku (mpro_copy_*)
- *   - 90°/180°/270° rotaatio + reflect-puskurissa (mpro_rotate_buffer)
- *   - mpro_drm__copy_frame — orchestraattori joka käyttää yllä olevia
+ * Contents:
+ *   - gamma LUT computation (mpro_drm__pow_lut, mpro_drm__build_power_lut)
+ *   - combined gamma + brightness LUT (mpro_drm__rebuild_combined_lut)
+ *   - DRM color_mgmt synchronisation (mpro_drm__apply_color_mgmt)
+ *   - pixel-format conversion with LUT lookup (mpro_drm__copy_*)
+ *   - 90/180/270-degree rotation + reflect, in a temp buffer
+ *     (mpro_drm__rotate_buffer)
+ *   - mpro_drm__copy_frame() — orchestrator that drives the above
  */
 
 #include <linux/module.h>
@@ -30,14 +31,16 @@
 /*
  * y = round(255 * (x/255)^(g_x100/100))
  *
- * Pilko gamma kokonaisosaan n ja murto-osaan f/100, ja interpoloi:
+ * Split gamma into an integer part n and a fractional part f/100, then
+ * interpolate between the two adjacent integer-exponent curves:
+ *
  *   y_n     = 255 * (x/255)^n     = x^n / 255^(n-1)   (n >= 1)
  *   y_n     = 255                                      (n == 0)
  *   y_{n+1} = 255 * (x/255)^(n+1) = x^(n+1) / 255^n
  *   y       = (y_n * (100-f) + y_{n+1} * f) / 100
  *
- * Tarkka integer-gammoissa, ±1 askel niiden välillä (gamma 0.5..4.0).
- * int_pow(255, 5) ≈ 1.08e12 mahtuu u64:een mukavasti.
+ * Exact for integer gammas, within ±1 between them (gamma 0.5..4.0).
+ * int_pow(255, 5) ≈ 1.08e12 fits comfortably in u64.
  */
 static u8 mpro_drm__pow_lut(u32 x, u32 g_x100)
 {
@@ -50,7 +53,7 @@ static u8 mpro_drm__pow_lut(u32 x, u32 g_x100)
 	if (x >= 255)
 		return 255;
 	if (g_x100 == 100)
-		return (u8) x;
+		return (u8)x;
 
 	if (n == 0)
 		y_n = 255;
@@ -62,22 +65,22 @@ static u8 mpro_drm__pow_lut(u32 x, u32 g_x100)
 	y = (y_n * (100 - f) + y_np1 * f) / 100;
 	if (y > 255)
 		y = 255;
-	return (u8) y;
+	return (u8)y;
 }
 
 void mpro_drm__rebuild_combined_lut(struct mpro_drm *mdrm)
 {
-	int c, i;
 	u32 b = mdrm->brightness;
+	int c, i;
 
 	for (c = 0; c < 3; c++) {
 		for (i = 0; i < 256; i++) {
-			u32 v = mdrm->gamma_valid ? mdrm->lut[c][i] : (u32) i;
+			u32 v = mdrm->gamma_valid ? mdrm->lut[c][i] : (u32)i;
 
 			if (b < MPRO_BRIGHTNESS_MAX)
 				v = v * b / MPRO_BRIGHTNESS_MAX;
 
-			mdrm->lut_combined[c][i] = (u8) v;
+			mdrm->lut_combined[c][i] = (u8)v;
 		}
 	}
 }
@@ -119,9 +122,9 @@ void mpro_drm__apply_color_mgmt(struct mpro_drm *mdrm,
 
 	lut = (struct drm_color_lut *)crtc_state->gamma_lut->data;
 	for (i = 0; i < 256; i++) {
-		mdrm->lut[0][i] = drm_color_lut_extract(lut[i].red, 8);
+		mdrm->lut[0][i] = drm_color_lut_extract(lut[i].red,   8);
 		mdrm->lut[1][i] = drm_color_lut_extract(lut[i].green, 8);
-		mdrm->lut[2][i] = drm_color_lut_extract(lut[i].blue, 8);
+		mdrm->lut[2][i] = drm_color_lut_extract(lut[i].blue,  8);
 	}
 	mdrm->gamma_valid = true;
 	mpro_drm__rebuild_combined_lut(mdrm);
@@ -140,7 +143,7 @@ static void mpro_drm__copy_rgb565(u8 *dst, const u8 *src,
 
 	for (y = 0; y < height; y++) {
 		const u16 *s = (const u16 *)(src + y * src_pitch);
-		u16 *d = (u16 *) (dst + y * dst_pitch);
+		u16       *d = (u16 *)(dst + y * dst_pitch);
 
 		if (!transform_needed) {
 			memcpy(d, s, width * 2);
@@ -149,9 +152,9 @@ static void mpro_drm__copy_rgb565(u8 *dst, const u8 *src,
 
 		for (x = 0; x < width; x++) {
 			u16 px = s[x];
-			u8 r = lut[0][(px >> 11) & 0x1f];
-			u8 g = lut[1][(px >> 5) & 0x3f];
-			u8 b = lut[2][px & 0x1f];
+			u8  r  = lut[0][(px >> 11) & 0x1f];
+			u8  g  = lut[1][(px >>  5) & 0x3f];
+			u8  b  = lut[2][ px        & 0x1f];
 
 			d[x] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 		}
@@ -168,27 +171,29 @@ static void mpro_drm__convert_xrgb8888_to_rgb565(u16 *dst, const u32 *src,
 
 	for (y = 0; y < height; y++) {
 		const u32 *s = (const u32 *)((const u8 *)src + y * src_pitch);
-		u16 *d = (u16 *) ((u8 *) dst + y * dst_pitch);
+		u16       *d = (u16 *)((u8 *)dst + y * dst_pitch);
 
 		if (!transform_needed) {
 			for (x = 0; x < width; x++) {
 				u32 px = s[x];
-				u8 r = (px >> 16) & 0xff;
-				u8 g = (px >> 8) & 0xff;
-				u8 b = px & 0xff;
+				u8  r  = (px >> 16) & 0xff;
+				u8  g  = (px >>  8) & 0xff;
+				u8  b  =  px        & 0xff;
 
 				d[x] = ((r >> 3) << 11) |
-				    ((g >> 2) << 5) | (b >> 3);
+				       ((g >> 2) <<  5) |
+					(b >> 3);
 			}
 		} else {
 			for (x = 0; x < width; x++) {
 				u32 px = s[x];
-				u8 r = lut[0][(px >> 16) & 0xff];
-				u8 g = lut[1][(px >> 8) & 0xff];
-				u8 b = lut[2][px & 0xff];
+				u8  r  = lut[0][(px >> 16) & 0xff];
+				u8  g  = lut[1][(px >>  8) & 0xff];
+				u8  b  = lut[2][ px        & 0xff];
 
 				d[x] = ((r >> 3) << 11) |
-				    ((g >> 2) << 5) | (b >> 3);
+				       ((g >> 2) <<  5) |
+					(b >> 3);
 			}
 		}
 	}
@@ -198,25 +203,26 @@ static void mpro_drm__convert_xrgb8888_to_rgb565(u16 *dst, const u32 *src,
 /* In-buffer rotation + reflect                                       */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Note: the caller is responsible for sizing `dst` correctly:
+ *   - (width x height) for ROTATE_0 / ROTATE_180
+ *   - (height x width) for ROTATE_90 / ROTATE_270
+ *
+ * mpro_drm__copy_frame() currently allocates temp_buffer at
+ * width*height, so 90/270 rotation requires a full-frame update.
+ * pipe_update() forces this whenever rotation != 0.
+ */
 static void mpro_drm__rotate_buffer(u16 *dst, u16 *src, int width, int height,
 				    unsigned int rotation)
 {
-	/*
-	 * HUOM: caller on vastuussa että `dst` on (width x height) -koossa
-	 * rotaatiolle 0/180 ja (height x width) -koossa rotaatiolle 90/270.
-	 * Tällä hetkellä mpro_drm__copy_frame allokoi temp_buffer:n width*height
-	 * -kokoisena, joten 90/270-rotaatio vaatii että koko kuva päivitetään.
-	 * pipe_update pakottaa tämän kun rotation != 0.
-	 */
-
 	const bool reflect_x = !!(rotation & DRM_MODE_REFLECT_X);
 	const bool reflect_y = !!(rotation & DRM_MODE_REFLECT_Y);
 	const unsigned int rot = rotation &
-	    (DRM_MODE_ROTATE_0 | DRM_MODE_ROTATE_90 |
-	     DRM_MODE_ROTATE_180 | DRM_MODE_ROTATE_270);
+		(DRM_MODE_ROTATE_0  | DRM_MODE_ROTATE_90 |
+		 DRM_MODE_ROTATE_180 | DRM_MODE_ROTATE_270);
 	int x, y;
 
-	/* Fast path: ei rotaatiota eikä peilausta → suora memcpy */
+	/* Fast path: no rotation and no reflection → straight memcpy */
 	if (rot == DRM_MODE_ROTATE_0 && !reflect_x && !reflect_y) {
 		memcpy(dst, src, (size_t)width * height * 2);
 		return;
@@ -224,7 +230,7 @@ static void mpro_drm__rotate_buffer(u16 *dst, u16 *src, int width, int height,
 
 	for (y = 0; y < height; y++) {
 		for (x = 0; x < width; x++) {
-			int sx = reflect_x ? (width - 1 - x) : x;
+			int sx = reflect_x ? (width  - 1 - x) : x;
 			int sy = reflect_y ? (height - 1 - y) : y;
 			u16 px = src[sy * width + sx];
 			int dx, dy, dw;
@@ -242,7 +248,7 @@ static void mpro_drm__rotate_buffer(u16 *dst, u16 *src, int width, int height,
 				dw = height;
 				break;
 			case DRM_MODE_ROTATE_180:
-				dx = width - 1 - x;
+				dx = width  - 1 - x;
 				dy = height - 1 - y;
 				dw = width;
 				break;
@@ -265,14 +271,14 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 			 struct drm_framebuffer *fb, struct drm_rect *clip)
 {
 	u32 width, height;
-	u8 *src_ptr;
-	u8 *dst_ptr;
+	u8  *src_ptr;
+	u8  *dst_ptr;
 	u32 dst_pitch = mdrm->width * 2;
 	u16 *temp_buffer = NULL;
-	bool needs_rotation = (mdrm->rotation != DRM_MODE_ROTATE_0);
 	u16 *final_dst;
-	bool transform_needed = mdrm->gamma_valid ||
-	    mdrm->brightness < MPRO_BRIGHTNESS_MAX;
+	bool needs_rotation    = (mdrm->rotation != DRM_MODE_ROTATE_0);
+	bool transform_needed  = mdrm->gamma_valid ||
+				 mdrm->brightness < MPRO_BRIGHTNESS_MAX;
 
 	if (clip->x2 > (int)mdrm->width || clip->y2 > (int)mdrm->height ||
 	    clip->x1 < 0 || clip->y1 < 0)
@@ -283,36 +289,39 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 	if (!mpro_drm__clip_valid(clip))
 		return -EINVAL;
 
-	width = clip->x2 - clip->x1;
+	width  = clip->x2 - clip->x1;
 	height = clip->y2 - clip->y1;
 
 	src_ptr = src->vaddr +
-	    clip->y1 * fb->pitches[0] + clip->x1 * fb->format->cpp[0];
+		  clip->y1 * fb->pitches[0] +
+		  clip->x1 * fb->format->cpp[0];
 
-	dst_ptr = mdrm->data + clip->y1 * dst_pitch + clip->x1 * 2;
+	dst_ptr = mdrm->data +
+		  clip->y1 * dst_pitch +
+		  clip->x1 * 2;
 
 	if (needs_rotation) {
-		temp_buffer =
-		    kmalloc((size_t)width * (size_t)height * 2, GFP_KERNEL);
+		temp_buffer = kmalloc((size_t)width * (size_t)height * 2,
+				      GFP_KERNEL);
 		if (!temp_buffer)
 			return -ENOMEM;
 	}
 
-	final_dst = needs_rotation ? temp_buffer : (u16 *) dst_ptr;
+	final_dst = needs_rotation ? temp_buffer : (u16 *)dst_ptr;
 
 	switch (fb->format->format) {
 	case DRM_FORMAT_RGB565:
-		mpro_drm__copy_rgb565((u8 *) final_dst, src_ptr,
+		mpro_drm__copy_rgb565((u8 *)final_dst, src_ptr,
 				      width, height,
 				      dst_pitch, fb->pitches[0],
-				      (const u8(*)[256])mdrm->lut_combined,
+				      (const u8 (*)[256])mdrm->lut_combined,
 				      transform_needed);
 		break;
 
 	case DRM_FORMAT_XRGB8888:
 		if (!transform_needed) {
 			struct iosys_map dst_map =
-			    IOSYS_MAP_INIT_VADDR(final_dst);
+				IOSYS_MAP_INIT_VADDR(final_dst);
 			const unsigned int dst_pitch_arr[1] = { dst_pitch };
 
 			drm_fb_xrgb8888_to_rgb565(&dst_map, dst_pitch_arr,
@@ -320,12 +329,12 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 						  &mdrm->conv_state);
 			break;
 		}
-		mpro_drm__convert_xrgb8888_to_rgb565(final_dst, (u32 *) src_ptr,
-						     width, height,
-						     dst_pitch, fb->pitches[0],
-						     (const u8(*)[256])mdrm->
-						     lut_combined,
-						     transform_needed);
+		mpro_drm__convert_xrgb8888_to_rgb565(final_dst,
+				(u32 *)src_ptr,
+				width, height,
+				dst_pitch, fb->pitches[0],
+				(const u8 (*)[256])mdrm->lut_combined,
+				transform_needed);
 		break;
 
 	default:
@@ -335,7 +344,7 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 	}
 
 	if (needs_rotation) {
-		mpro_drm__rotate_buffer((u16 *) dst_ptr, temp_buffer,
+		mpro_drm__rotate_buffer((u16 *)dst_ptr, temp_buffer,
 					width, height, mdrm->rotation);
 		kfree(temp_buffer);
 	}

@@ -2,9 +2,9 @@
 /*
  * mpro_drm_main.c — DRM driver registration, probe, remove.
  *
- * Sisältää platform_driver-rakenteen ja itse drm_driver-määrittelyn.
- * Pipe/connector-callbackit, värilogiikka, sysfs ja EDID ovat omissa
- * tiedostoissaan.
+ * Contains the platform_driver structure and the drm_driver definition.
+ * Pipe and connector callbacks, color logic, sysfs and EDID live in
+ * their own files.
  */
 
 #include <linux/module.h>
@@ -68,13 +68,13 @@ static int mpro_drm__dumb_create(struct drm_file *file,
 DEFINE_DRM_GEM_FOPS(mpro_drm__fops);
 
 static struct drm_driver mpro_drm__driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
-	.fops = &mpro_drm__fops,
-	.name = DRIVER_NAME,
-	.desc = DRIVER_DESC,
-	.major = DRIVER_MAJOR,
-	.minor = DRIVER_MINOR,
-	.dumb_create = mpro_drm__dumb_create,
+	.driver_features	= DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
+	.fops			= &mpro_drm__fops,
+	.name			= DRIVER_NAME,
+	.desc			= DRIVER_DESC,
+	.major			= DRIVER_MAJOR,
+	.minor			= DRIVER_MINOR,
+	.dumb_create		= mpro_drm__dumb_create,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
@@ -134,10 +134,10 @@ static int mpro_drm__pm_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops mpro_drm__pm_ops = {
-	.suspend = mpro_drm__pm_suspend,
-	.resume = mpro_drm__pm_resume,
-	.runtime_suspend = mpro_drm__pm_suspend,
-	.runtime_resume = mpro_drm__pm_resume,
+	.suspend		= mpro_drm__pm_suspend,
+	.resume			= mpro_drm__pm_resume,
+	.runtime_suspend	= mpro_drm__pm_suspend,
+	.runtime_resume		= mpro_drm__pm_resume,
 };
 
 /* ------------------------------------------------------------------ */
@@ -161,17 +161,19 @@ static const uint64_t mpro_drm__pipe_modifiers[] = {
 static int mpro_drm__data_alloc(struct mpro_drm *mdrm)
 {
 	size_t block_size = (size_t)mdrm->mpro->model->width *
-	    (size_t)mdrm->mpro->model->height *
-	    MPRO_BPP / 8 + (size_t)mdrm->mpro->model->margin;
+			    (size_t)mdrm->mpro->model->height *
+			    MPRO_BPP / 8 +
+			    (size_t)mdrm->mpro->model->margin;
 
 	mdrm->data = drmm_kmalloc(&mdrm->drm, block_size, GFP_KERNEL);
 	if (!mdrm->data)
 		return -ENOMEM;
 
 	/*
-	 * Margin-tavut näytön lopussa: laite vaatii että ne ovat nollia.
-	 * Kirjoitamme nollat kerran, ja koska DRM koskee vain kuva-alueeseen
-	 * (width*height*2 ensimmäistä tavua), margin pysyy nollissa.
+	 * Margin bytes at the end of the framebuffer must remain zero —
+	 * the device requires it. They are zeroed once here, and since
+	 * DRM only ever touches the image area (the first width*height*2
+	 * bytes), the margin keeps its zero contents.
 	 */
 	memset(mdrm->data, 0, block_size);
 	mdrm->data_size = block_size;
@@ -205,20 +207,20 @@ static int mpro_drm__probe(struct platform_device *pdev)
 
 	drm = &mdrm->drm;
 
-	mdrm->mpro = mpro;
-	mdrm->pdev = pdev;
-	mdrm->dev = dev;
-	mdrm->rotation = mpro->model->native_rotation;
-	mdrm->frame_time = ktime_set(0, NSEC_PER_SEC / 60);
-	mdrm->brightness = MPRO_BRIGHTNESS_DEFAULT;
-	mdrm->gamma_x100 = 100;
-	mdrm->blanked = false;
-	mdrm->disable_partial = mpro->model->margin > 0
-	    ? true : mpro_drm__disable_partial_default;
+	mdrm->mpro		= mpro;
+	mdrm->pdev		= pdev;
+	mdrm->dev		= dev;
+	mdrm->rotation		= mpro->model->native_rotation;
+	mdrm->frame_time	= ktime_set(0, NSEC_PER_SEC / 60);
+	mdrm->brightness	= MPRO_BRIGHTNESS_DEFAULT;
+	mdrm->gamma_x100	= 100;
+	mdrm->blanked		= false;
+	mdrm->disable_partial	= mpro->model->margin > 0 ?
+				  true : mpro_drm__disable_partial_default;
 
 	swap = mpro_drm__rotation_swaps_dims(mdrm->rotation);
-	mdrm->width = swap ? mpro->model->height : mpro->model->width;
-	mdrm->height = swap ? mpro->model->width : mpro->model->height;
+	mdrm->width  = swap ? mpro->model->height : mpro->model->width;
+	mdrm->height = swap ? mpro->model->width  : mpro->model->height;
 
 	if (mpro->model->margin > 0)
 		drm_info(drm,
@@ -238,22 +240,22 @@ static int mpro_drm__probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	drm->mode_config.min_width = mdrm->width;
-	drm->mode_config.max_width = mdrm->width;
-	drm->mode_config.min_height = mdrm->height;
-	drm->mode_config.max_height = mdrm->height;
-	drm->mode_config.funcs = &mpro_drm__mode_config_funcs;
+	drm->mode_config.min_width	 = mdrm->width;
+	drm->mode_config.max_width	 = mdrm->width;
+	drm->mode_config.min_height	 = mdrm->height;
+	drm->mode_config.max_height	 = mdrm->height;
+	drm->mode_config.funcs		 = &mpro_drm__mode_config_funcs;
 	drm->mode_config.preferred_depth = 16;
-	drm->mode_config.prefer_shadow = 1;
-	drm->mode_config.cursor_width = 0;
-	drm->mode_config.cursor_height = 0;
+	drm->mode_config.prefer_shadow	 = 1;
+	drm->mode_config.cursor_width	 = 0;
+	drm->mode_config.cursor_height	 = 0;
 
 	/*
-	 * Älä aseta drm->vblank_disable_immediate = true. Hrtimer-pohjaisessa
-	 * vblankissa se aiheuttaa race:n kun disable_vblank-callback peruuttaa
-	 * timerin samaan aikaan kun se on juuri laukeamassa. Käytetään
-	 * oletusta: 5 sekunnin viive ennen vblank-sammutusta. Hyvin pieni
-	 * energianhukka, mutta vakaata.
+	 * Do NOT set drm->vblank_disable_immediate = true. With our
+	 * hrtimer-based vblank it would race the disable_vblank callback
+	 * against a timer that's about to fire. Stay with the default
+	 * 5-second delay before vblank is shut down: a tiny power cost,
+	 * but stable.
 	 */
 
 	drm_connector_helper_add(&mdrm->connector,
@@ -268,15 +270,14 @@ static int mpro_drm__probe(struct platform_device *pdev)
 	}
 
 	mdrm->connector.status = connector_status_connected;
-	mdrm->connector.polled = 0;	/* USB-näyttö on aina kytkettynä */
+	mdrm->connector.polled = 0;	/* USB display is always considered connected */
 
-	ret =
-	    drm_simple_display_pipe_init(drm, &mdrm->pipe,
-					 &mpro_drm__pipe_funcs,
-					 mpro_drm__formats,
-					 ARRAY_SIZE(mpro_drm__formats),
-					 mpro_drm__pipe_modifiers,
-					 &mdrm->connector);
+	ret = drm_simple_display_pipe_init(drm, &mdrm->pipe,
+					   &mpro_drm__pipe_funcs,
+					   mpro_drm__formats,
+					   ARRAY_SIZE(mpro_drm__formats),
+					   mpro_drm__pipe_modifiers,
+					   &mdrm->connector);
 	if (ret) {
 		drm_err(drm, "Failed to initialize pipe: %d\n", ret);
 		return ret;
@@ -284,13 +285,12 @@ static int mpro_drm__probe(struct platform_device *pdev)
 
 	drm_plane_enable_fb_damage_clips(&mdrm->pipe.plane);
 
-	ret =
-	    drm_plane_create_rotation_property(&mdrm->pipe.plane,
-					       DRM_MODE_ROTATE_0,
-					       DRM_MODE_ROTATE_0 |
-					       DRM_MODE_ROTATE_90 |
-					       DRM_MODE_ROTATE_180 |
-					       DRM_MODE_ROTATE_270);
+	ret = drm_plane_create_rotation_property(&mdrm->pipe.plane,
+						 DRM_MODE_ROTATE_0,
+						 DRM_MODE_ROTATE_0 |
+						 DRM_MODE_ROTATE_90 |
+						 DRM_MODE_ROTATE_180 |
+						 DRM_MODE_ROTATE_270);
 	if (ret)
 		drm_warn(drm, "Failed to create rotation property: %d\n", ret);
 
@@ -302,10 +302,10 @@ static int mpro_drm__probe(struct platform_device *pdev)
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
 	/*
-	 * BUG FIX: älä luo gamma_lut_property käsin ennen
-	 * drm_crtc_enable_color_mgmt-kutsua. drm_crtc_enable_color_mgmt
-	 * luo propertyt itse; manuaalinen luonti johti duplikaatteihin
-	 * ja rikki olevaan tilarakenteeseen.
+	 * Do not create gamma_lut_property by hand before calling
+	 * drm_crtc_enable_color_mgmt(): the helper creates the properties
+	 * itself, and a manual creation produced duplicates and a broken
+	 * state structure.
 	 */
 	drm_crtc_enable_color_mgmt(&mdrm->pipe.crtc, 0, false, 256);
 
@@ -365,7 +365,7 @@ static void mpro_drm__remove(struct platform_device *pdev)
 
 	drm_format_conv_state_release(&mdrm->conv_state);
 
-	/* unplug ensin (estää uudet operaatiot), sitten shutdown */
+	/* Unplug first (blocks new operations), then shut down */
 	drm_dev_unplug(&mdrm->drm);
 	drm_atomic_helper_shutdown(&mdrm->drm);
 }
@@ -373,12 +373,12 @@ static void mpro_drm__remove(struct platform_device *pdev)
 /* ------------------------------------------------------------------ */
 
 static struct platform_driver mpro_drm__platform_driver = {
-	.probe = mpro_drm__probe,
-	.remove = mpro_drm__remove,
-	.driver = {
-		   .name = DRIVER_NAME,
-		   .pm = &mpro_drm__pm_ops,
-		    },
+	.probe	= mpro_drm__probe,
+	.remove	= mpro_drm__remove,
+	.driver	= {
+		.name	= DRIVER_NAME,
+		.pm	= &mpro_drm__pm_ops,
+	},
 };
 
 module_platform_driver(mpro_drm__platform_driver);

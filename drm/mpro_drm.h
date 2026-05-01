@@ -33,10 +33,10 @@
 #define MPRO_BRIGHTNESS_MIN	0
 #define MPRO_BRIGHTNESS_MAX	100
 
-/* lut size = 3 * 256 */
+/* LUT size = 3 channels * 256 entries */
 #define MPRO_DRM_LUT_SIZE	768
 
-/* Display timing (samaa käytetään moodin luonnissa ja EDID:ssä) */
+/* Display timing — shared between mode construction and EDID */
 #define MPRO_TIMING_HSYNC_OFF	40
 #define MPRO_TIMING_HSYNC_PULSE	48
 #define MPRO_TIMING_HBACK	40
@@ -50,40 +50,40 @@
 /* ------------------------------------------------------------------ */
 
 struct mpro_drm {
-	struct drm_device drm;
-	struct drm_simple_display_pipe pipe;
-	struct drm_connector connector;
-	struct drm_fb_helper fb_helper;
-	struct drm_format_conv_state conv_state;
+	struct drm_device		drm;
+	struct drm_simple_display_pipe	pipe;
+	struct drm_connector		connector;
+	struct drm_fb_helper		fb_helper;
+	struct drm_format_conv_state	conv_state;
 
-	struct mpro_device *mpro;
-	struct platform_device *pdev;
-	struct device *dev;
+	struct mpro_device		*mpro;
+	struct platform_device		*pdev;
+	struct device			*dev;
 
-	u32 width;
-	u32 height;
+	u32				width;
+	u32				height;
 
-	void *data;
-	size_t data_size;
+	void				*data;
+	size_t				data_size;
 
-	struct hrtimer vblank_timer;
-	ktime_t frame_time;
-	bool vblank_enabled;
-	bool vblank_was_enabled_pre_suspend;
+	struct hrtimer			vblank_timer;
+	ktime_t				frame_time;
+	bool				vblank_enabled;
+	bool				vblank_was_enabled_pre_suspend;
 
-	u16 rotation;
-	bool suspended;
+	u16				rotation;
+	bool				suspended;
 
 	/* Color management */
-	u8 lut[3][256];		/* per-channel sw gamma LUT */
-	u8 lut_combined[3][256];	/* gamma + brightness yhdistettynä */
-	bool gamma_valid;
-	u32 brightness;		/* 0..MPRO_BRIGHTNESS_MAX */
-	struct drm_property *brightness_prop;
-	u32 gamma_x100;		/* gamma * 100 */
+	u8				lut[3][256];	  /* per-channel software gamma */
+	u8				lut_combined[3][256]; /* gamma * brightness */
+	bool				gamma_valid;
+	u32				brightness;	  /* 0..MPRO_BRIGHTNESS_MAX */
+	struct drm_property		*brightness_prop;
+	u32				gamma_x100;	  /* gamma * 100 */
 
-	bool blanked;
-	bool disable_partial;
+	bool				blanked;
+	bool				disable_partial;
 };
 
 /* ------------------------------------------------------------------ */
@@ -112,30 +112,30 @@ static inline bool mpro_drm__rotation_swaps_dims(u16 r)
 
 /* mpro_drm_pipe.c */
 enum hrtimer_restart mpro_drm__vblank_timer(struct hrtimer *timer);
-extern const struct drm_simple_display_pipe_funcs mpro_drm__pipe_funcs;
-extern const struct drm_mode_config_funcs mpro_drm__mode_config_funcs;
-extern const struct drm_connector_funcs mpro_drm__connector_funcs;
-extern const struct drm_connector_helper_funcs mpro_drm__connector_helper_funcs;
+extern const struct drm_simple_display_pipe_funcs	mpro_drm__pipe_funcs;
+extern const struct drm_mode_config_funcs		mpro_drm__mode_config_funcs;
+extern const struct drm_connector_funcs			mpro_drm__connector_funcs;
+extern const struct drm_connector_helper_funcs		mpro_drm__connector_helper_funcs;
 
-int mpro_drm__request_update(struct mpro_drm *mdrm,
-			     u16 x, u16 y, u16 w, u16 h, bool force);
+int  mpro_drm__request_update(struct mpro_drm *mdrm,
+			      u16 x, u16 y, u16 w, u16 h, bool force);
 void mpro_drm__fb_mark_dirty(struct mpro_drm *mdrm, struct iosys_map *src,
 			     struct drm_framebuffer *fb, struct drm_rect *rect);
 
 /* mpro_drm_color.c */
-int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
-			 struct drm_framebuffer *fb, struct drm_rect *clip);
+int  mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
+			  struct drm_framebuffer *fb, struct drm_rect *clip);
 void mpro_drm__rebuild_combined_lut(struct mpro_drm *mdrm);
 void mpro_drm__build_power_lut(struct mpro_drm *mdrm, u32 g_x100);
 void mpro_drm__apply_color_mgmt(struct mpro_drm *mdrm,
 				struct drm_crtc_state *crtc_state);
 
 /* mpro_drm_sysfs.c */
-int mpro_drm__sysfs_create(struct mpro_drm *mdrm);
+int  mpro_drm__sysfs_create(struct mpro_drm *mdrm);
 void mpro_drm__sysfs_remove(struct mpro_drm *mdrm);
 void mpro_drm__apply_rotation(struct mpro_drm *mdrm, u16 new_rotation);
 
 /* mpro_drm_edid.c */
-int mpro_drm__create_edid(struct mpro_drm *mdrm);
+int  mpro_drm__create_edid(struct mpro_drm *mdrm);
 
 #endif /* _MPRO_DRM_H_ */

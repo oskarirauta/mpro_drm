@@ -2,15 +2,15 @@
 /*
  * mpro_drm_pipe.c — DRM pipe & connector callbacks.
  *
- * Sisältää:
+ * Contents:
  *   - simple_display_pipe enable/disable/update/check
- *   - vblank-emulointi hrtimer:llä
- *   - connector-funktiot (atomic property get/set, get_modes)
- *   - mpro_drm__request_update — DRM:n rajapinta parent-pipelineen
- *   - mpro_drm__fb_mark_dirty — damage-alueen lähettäminen laitteelle
+ *   - hrtimer-based vblank emulation
+ *   - connector functions (atomic property get/set, get_modes)
+ *   - mpro_drm__request_update() — DRM's interface to the parent pipeline
+ *   - mpro_drm__fb_mark_dirty()  — push a damage region to the device
  *
- * Kaikki USB-kutsut delegoidaan parent-puolelle (mpro_send_*).
- * Tämä tiedosto ei tunne USB:tä.
+ * All USB I/O is delegated to the parent (mpro_send_*). This file is
+ * USB-agnostic.
  */
 
 #include <linux/module.h>
@@ -36,9 +36,9 @@
 int mpro_drm__request_update(struct mpro_drm *mdrm,
 			     u16 x, u16 y, u16 w, u16 h, bool force)
 {
-	const size_t pitch = (size_t)mdrm->width * 2;
+	const size_t pitch     = (size_t)mdrm->width * 2;
 	const size_t row_bytes = (size_t)w * 2;
-	const u32 full_w = mdrm->width;
+	const u32    full_w    = mdrm->width;
 	bool full_frame;
 	void *bounce = NULL;
 	int ret;
@@ -63,22 +63,23 @@ int mpro_drm__request_update(struct mpro_drm *mdrm,
 		return mpro_send_full_frame(mdrm->mpro, mdrm->data,
 					    mdrm->data_size);
 
-	/* Yhtenäinen alue (koko leveys, x=0): suora pointteri */
+	/* Contiguous region (full width, x=0): pass the pointer directly */
 	if (w == full_w && x == 0) {
-		void *src = (u8 *) mdrm->data + (size_t)y * pitch;
+		void *src = (u8 *)mdrm->data + (size_t)y * pitch;
 
 		return mpro_send_partial_frame(mdrm->mpro, src, x, y, w, h);
 	}
 
-	/* Ei-yhtenäinen: kopioi rivit yhtenäiseen bounce-bufferiin */
+	/* Non-contiguous: copy rows into a contiguous bounce buffer */
 	bounce = kmalloc(row_bytes * h, GFP_KERNEL);
 	if (!bounce)
 		return -ENOMEM;
 
 	for (i = 0; i < h; i++)
-		memcpy((u8 *) bounce + (size_t)i * row_bytes,
-		       (u8 *) mdrm->data + ((size_t)y + i) * pitch +
-		       (size_t)x * 2, row_bytes);
+		memcpy((u8 *)bounce + (size_t)i * row_bytes,
+		       (u8 *)mdrm->data + ((size_t)y + i) * pitch +
+				(size_t)x * 2,
+		       row_bytes);
 
 	ret = mpro_send_partial_frame(mdrm->mpro, bounce, x, y, w, h);
 	kfree(bounce);
@@ -129,9 +130,9 @@ out:
 /* ------------------------------------------------------------------ */
 
 const struct drm_mode_config_funcs mpro_drm__mode_config_funcs = {
-	.fb_create = drm_gem_fb_create_with_dirty,
-	.atomic_check = drm_atomic_helper_check,
-	.atomic_commit = drm_atomic_helper_commit,
+	.fb_create	= drm_gem_fb_create_with_dirty,
+	.atomic_check	= drm_atomic_helper_check,
+	.atomic_commit	= drm_atomic_helper_commit,
 };
 
 /* ------------------------------------------------------------------ */
@@ -141,31 +142,29 @@ const struct drm_mode_config_funcs mpro_drm__mode_config_funcs = {
 static int mpro_drm__connector_get_modes(struct drm_connector *connector)
 {
 	struct mpro_drm *mdrm =
-	    container_of(connector, struct mpro_drm, connector);
+		container_of(connector, struct mpro_drm, connector);
 	struct drm_display_mode *mode;
 
 	mode = drm_mode_create(connector->dev);
 	if (!mode)
 		return 0;
 
-	mode->hdisplay = mdrm->width;
+	mode->hdisplay    = mdrm->width;
 	mode->hsync_start = mdrm->width + MPRO_TIMING_HSYNC_OFF;
-	mode->hsync_end =
-	    mdrm->width + MPRO_TIMING_HSYNC_OFF + MPRO_TIMING_HSYNC_PULSE;
-	mode->htotal =
-	    mdrm->width + MPRO_TIMING_HSYNC_OFF + MPRO_TIMING_HSYNC_PULSE +
-	    MPRO_TIMING_HBACK;
+	mode->hsync_end   = mdrm->width + MPRO_TIMING_HSYNC_OFF +
+			    MPRO_TIMING_HSYNC_PULSE;
+	mode->htotal      = mdrm->width + MPRO_TIMING_HSYNC_OFF +
+			    MPRO_TIMING_HSYNC_PULSE + MPRO_TIMING_HBACK;
 
-	mode->vdisplay = mdrm->height;
+	mode->vdisplay    = mdrm->height;
 	mode->vsync_start = mdrm->height + MPRO_TIMING_VSYNC_OFF;
-	mode->vsync_end =
-	    mdrm->height + MPRO_TIMING_VSYNC_OFF + MPRO_TIMING_VSYNC_PULSE;
-	mode->vtotal =
-	    mdrm->height + MPRO_TIMING_VSYNC_OFF + MPRO_TIMING_VSYNC_PULSE +
-	    MPRO_TIMING_VBACK;
+	mode->vsync_end   = mdrm->height + MPRO_TIMING_VSYNC_OFF +
+			    MPRO_TIMING_VSYNC_PULSE;
+	mode->vtotal      = mdrm->height + MPRO_TIMING_VSYNC_OFF +
+			    MPRO_TIMING_VSYNC_PULSE + MPRO_TIMING_VBACK;
 
 	mode->clock = MPRO_TIMING_CLOCK_KHZ;
-	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+	mode->type  = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
 
 	drm_mode_set_name(mode);
 	drm_mode_probed_add(connector, mode);
@@ -178,23 +177,22 @@ static int mpro_drm__connector_set_property(struct drm_connector *connector,
 					    uint64_t val)
 {
 	struct mpro_drm *mdrm =
-	    container_of(connector, struct mpro_drm, connector);
+		container_of(connector, struct mpro_drm, connector);
 
 	if (property == mdrm->brightness_prop) {
-		mdrm->brightness = (u32) val;
+		mdrm->brightness = (u32)val;
 		return 0;
 	}
 	return -EINVAL;
 }
 
 static int mpro_drm__connector_get_property(struct drm_connector *connector,
-					    const struct drm_connector_state
-					    *state,
+					    const struct drm_connector_state *state,
 					    struct drm_property *property,
 					    uint64_t *val)
 {
 	struct mpro_drm *mdrm =
-	    container_of(connector, struct mpro_drm, connector);
+		container_of(connector, struct mpro_drm, connector);
 
 	if (property == mdrm->brightness_prop) {
 		*val = mdrm->brightness;
@@ -208,13 +206,13 @@ const struct drm_connector_helper_funcs mpro_drm__connector_helper_funcs = {
 };
 
 const struct drm_connector_funcs mpro_drm__connector_funcs = {
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.reset = drm_atomic_helper_connector_reset,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-	.atomic_set_property = mpro_drm__connector_set_property,
-	.atomic_get_property = mpro_drm__connector_get_property,
+	.fill_modes		= drm_helper_probe_single_connector_modes,
+	.destroy		= drm_connector_cleanup,
+	.reset			= drm_atomic_helper_connector_reset,
+	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
+	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
+	.atomic_set_property	= mpro_drm__connector_set_property,
+	.atomic_get_property	= mpro_drm__connector_get_property,
 };
 
 /* ------------------------------------------------------------------ */
@@ -224,10 +222,12 @@ const struct drm_connector_funcs mpro_drm__connector_funcs = {
 enum hrtimer_restart mpro_drm__vblank_timer(struct hrtimer *timer)
 {
 	struct mpro_drm *mdrm =
-	    container_of(timer, struct mpro_drm, vblank_timer);
+		container_of(timer, struct mpro_drm, vblank_timer);
 
-	/* Tarkista atomic-flagi joka muuttuu vain enable/disable_vblank:ssa.
-	 * READ_ONCE estää kompilaattoria caching-pelaamasta. */
+	/*
+	 * The flag is only flipped from enable_vblank/disable_vblank.
+	 * READ_ONCE prevents the compiler from caching across the check.
+	 */
 	if (!READ_ONCE(mdrm->vblank_enabled))
 		return HRTIMER_NORESTART;
 
@@ -258,9 +258,9 @@ static void mpro_drm__crtc_disable_vblank(struct drm_simple_display_pipe *pipe)
 /* ------------------------------------------------------------------ */
 
 /*
- * Kuluta crtc:n vblank-event aina kun atomic commit valmistuu, myös
- * silloin kun fb on NULL (rmfb-polku). Muuten DRM core varoittaa:
- * "drm_atomic_helper_commit_hw_done: crtc_state->event != NULL".
+ * Consume the CRTC's vblank event whenever an atomic commit completes,
+ * including the fb=NULL (rmfb) path. Otherwise the DRM core warns:
+ *   drm_atomic_helper_commit_hw_done: crtc_state->event != NULL
  */
 static void mpro_drm__finish_pageflip(struct drm_simple_display_pipe *pipe)
 {
@@ -288,7 +288,7 @@ static void mpro_drm__pipe_disable(struct drm_simple_display_pipe *pipe)
 
 	mdrm->blanked = true;
 
-	/* Lähetä musta frame ennen pipe-sammutusta */
+	/* Push a black frame before tearing the pipe down */
 	black = kzalloc(mdrm->data_size, GFP_KERNEL);
 	if (black) {
 		mdrm->data = black;
@@ -298,11 +298,13 @@ static void mpro_drm__pipe_disable(struct drm_simple_display_pipe *pipe)
 		kfree(black);
 	}
 
-	/* Lähetä mahdollinen pending vblank event ENNEN vblank_off:ia */
+	/* Send any pending vblank event BEFORE drm_crtc_vblank_off() */
 	mpro_drm__finish_pageflip(pipe);
 
-	/* Sammuta vblank — drm_crtc_vblank_off kutsuu disable_vblank
-	 * callbackin joka peruuttaa hrtimerin */
+	/*
+	 * Stop vblank — drm_crtc_vblank_off() invokes the disable_vblank
+	 * callback, which in turn cancels the hrtimer.
+	 */
 	drm_crtc_vblank_off(&mdrm->pipe.crtc);
 
 	mpro_screen_notify_off(mdrm->mpro);
@@ -322,8 +324,10 @@ static void mpro_drm__pipe_enable(struct drm_simple_display_pipe *pipe,
 	mpro_autopm_get_interface(mdrm->mpro);
 	mdrm->blanked = false;
 
-	/* Käynnistä vblank ENNEN frame-päivityksiä — tämä asettaa
-	 * vblank-aikaleimat oikein compositoria varten */
+	/*
+	 * Start vblank BEFORE pushing any frames — this seeds the vblank
+	 * timestamps the compositor relies on.
+	 */
 	drm_crtc_vblank_on(&mdrm->pipe.crtc);
 
 	mpro_drm__apply_color_mgmt(mdrm, crtc_state);
@@ -346,8 +350,11 @@ static void mpro_drm__pipe_enable(struct drm_simple_display_pipe *pipe,
 
 	mpro_screen_notify_on(mdrm->mpro);
 
-	/* Modeset-tason vblank event (jos commit:ssa oli event ja
-	 * pipe_update ei ajaudu) — pipe_update ottaa frame-eventit */
+	/*
+	 * Modeset-level vblank event: if the commit carried an event and
+	 * pipe_update won't run, deliver it here. Frame-level events go
+	 * through pipe_update().
+	 */
 	mpro_drm__finish_pageflip(pipe);
 }
 
@@ -363,8 +370,8 @@ static void mpro_drm__pipe_update(struct drm_simple_display_pipe *pipe,
 	struct drm_framebuffer *fb;
 	struct drm_rect damage;
 	struct drm_rect bb = {
-		.x1 = INT_MAX,.y1 = INT_MAX,
-		.x2 = INT_MIN,.y2 = INT_MIN,
+		.x1 = INT_MAX, .y1 = INT_MAX,
+		.x2 = INT_MIN, .y2 = INT_MIN,
 	};
 	bool any = false;
 
@@ -386,12 +393,13 @@ static void mpro_drm__pipe_update(struct drm_simple_display_pipe *pipe,
 			}
 
 			/*
-			 * Rotation 90/180/270 + reflect-tapauksissa damage-alue ei voi olla
-			 * mielivaltainen rect — mpro_drm__rotate_buffer:n tarvitsema dst-puskuri
-			 * on kokonaisen kuvan kokoinen, eikä clip-bounds:in mukainen. Pakotetaan
-			 * koko frame jotta puskurin koko ja koordinaatit täsmäävät.
+			 * For 90/180/270 rotations and reflected modes the
+			 * damage region cannot be an arbitrary rectangle: the
+			 * destination buffer used by the rotation helper has
+			 * full-frame dimensions, not clip-bounds dimensions.
+			 * Force a full-frame update so buffer size and
+			 * coordinates stay consistent.
 			 */
-
 			if (mdrm->rotation != DRM_MODE_ROTATE_0) {
 				bb.x1 = 0;
 				bb.y1 = 0;
@@ -421,13 +429,13 @@ static int mpro_drm__crtc_atomic_check(struct drm_simple_display_pipe *pipe,
 		crtc_state->mode_changed, plane_state ? plane_state->fb : NULL);
 
 	/*
-	 * HUOM: rotaatio hallitaan ainoastaan sysfs:n kautta. Emme
-	 * synkronoi mdrm->rotation:ia plane_state->rotation:n perusteella,
-	 * koska userspace ei aseta sitä — sen oletusarvo on aina
-	 * DRM_MODE_ROTATE_0, mikä nollaisi sysfs:llä asetetun rotaation.
+	 * Note: rotation is driven only through sysfs. mdrm->rotation is
+	 * deliberately not synchronised with plane_state->rotation, since
+	 * userspace doesn't set the latter — it defaults to ROTATE_0,
+	 * which would clobber the value configured via sysfs.
 	 */
 
-	/* All-disable on aina sallittu (modeset shutdown) */
+	/* All-disable is always allowed (modeset shutdown) */
 	if (!crtc_state->enable || !crtc_state->active)
 		return 0;
 
@@ -436,7 +444,8 @@ static int mpro_drm__crtc_atomic_check(struct drm_simple_display_pipe *pipe,
 
 		if (length != 256) {
 			drm_dbg(&mdrm->drm,
-				"Gamma LUT size must be 256, got %u\n", length);
+				"Gamma LUT size must be 256, got %u\n",
+				length);
 			return -EINVAL;
 		}
 	}
@@ -444,11 +453,11 @@ static int mpro_drm__crtc_atomic_check(struct drm_simple_display_pipe *pipe,
 }
 
 const struct drm_simple_display_pipe_funcs mpro_drm__pipe_funcs = {
-	.enable = mpro_drm__pipe_enable,
-	.disable = mpro_drm__pipe_disable,
-	.update = mpro_drm__pipe_update,
-	.check = mpro_drm__crtc_atomic_check,
-	.enable_vblank = mpro_drm__crtc_enable_vblank,
-	.disable_vblank = mpro_drm__crtc_disable_vblank,
+	.enable		= mpro_drm__pipe_enable,
+	.disable	= mpro_drm__pipe_disable,
+	.update		= mpro_drm__pipe_update,
+	.check		= mpro_drm__crtc_atomic_check,
+	.enable_vblank	= mpro_drm__crtc_enable_vblank,
+	.disable_vblank	= mpro_drm__crtc_disable_vblank,
 	DRM_GEM_SIMPLE_DISPLAY_PIPE_SHADOW_PLANE_FUNCS,
 };
