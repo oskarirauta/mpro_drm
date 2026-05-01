@@ -236,13 +236,13 @@ exposes how the pipeline is performing:
 
 ```sh
 $ cat /sys/bus/usb/drivers/mpro/3-3:1.0/stats
-submitted=12240 displayed=2040 dropped=10200 fps=34.00 efficiency=16.66%
+submitted=7200 displayed=2040 dropped=5160 fps=34.00 efficiency=28.33%
 ```
 
-In this example the application produced about 289 frames per second,
-but only ~34 fps reached the device — the limit being USB 2.0
-throughput.
-
+In this example the compositor submitted about 120 frame updates
+per second to the pipeline, but only ~34 fps reached the device —
+the limit being USB 2.0 throughput. The remaining updates were
+coalesced (newer frames replacing older pending ones).
 LZ4 compression can significantly improve effective throughput:
 
 ```sh
