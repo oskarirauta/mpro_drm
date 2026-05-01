@@ -1,0 +1,5 @@
+tests
+*.o
+*.ko
+*.mod
+*.mod.o
