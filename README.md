@@ -29,7 +29,7 @@ jälkeen.
 - Kerneli-konfiguraatio: `CONFIG_DRM`, `CONFIG_DRM_GEM_SHMEM_HELPER`,
   `CONFIG_DRM_KMS_HELPER`, `CONFIG_BACKLIGHT_CLASS_DEVICE`,
   `CONFIG_INPUT`, `CONFIG_USB`, `CONFIG_MFD_CORE`,
-  `CONFIG_LZ4_COMPRESS` (vain jos LZ4-pakkausta käytetään)
+  `CONFIG_LZ4_COMPRESS`, `CONFIG_LZ4HC_COMPRESS`
 - Kerneli-headerit (`/lib/modules/$(uname -r)/build`)
 
 ## Kääntäminen
@@ -53,8 +53,7 @@ sudo depmod -a
 ```
 
 Muista myös rekisteröidä DKMS:n kautta jos haluat että moduulit
-käännetään automaattisesti kerneli-päivityksissä — tämä on **ei vielä
-tuettu** mutta tulossa.
+käännetään automaattisesti kerneli-päivityksissä.
 
 ## Käyttö
 
@@ -67,7 +66,7 @@ automaattisesti udev-mekanismin kautta. Manuaalinen lataus:
 sudo modprobe mpro
 ```
 
-apsi-moduulit (`mpro_drm`, `mpro_backlight`, `mpro_touchscreen`)
+lapsi-moduulit (`mpro_drm`, `mpro_backlight`, `mpro_touchscreen`)
 latautuvat automaattisesti MFD-mekanismin kautta.
 
 Tarkista että kaikki latautui:
@@ -80,6 +79,11 @@ dmesg | grep -i mpro
 Pitäisi näkyä jotain tähän tapaan:
 
 ```
+mpro_touchscreen	16384	0
+mpro_backlight		12288	0
+mpro_drm		28672	0
+mpro			40960	3 mpro_touchscreen,mpro_backlight,mpro_drm
+
 mpro: Detected MPro 6.8"
 mpro_drm: [drm] fb1: mprodrmfb frame buffer device
 mpro_backlight: backlight registered: mpro-3-3 (default 128/255)
@@ -91,7 +95,7 @@ Saadaksesi tekstikonsolin näkymään MPro-näytöllä, lisää
 kerneli-komentoriville:
 
 ```
-mpro.fbdev:1
+mpro.fbdev=1
 fbcon=map:1
 ```
 
@@ -108,8 +112,21 @@ DRM-laite (`/dev/dri/card1` tai vastaava) toimii suoraan Wayland-
 kompositoreissa (Weston, Sway, Mutter) ja X.Org:ssa.
 
 ```sh
-weston --backend=drm --tty=2 --seat=seat1
+weston --backend=drm --drm-device=card1 --use-pixman
 ```
+
+### Videon toisto
+
+Videon toisto DRM-laitteella onnistuu hyvin konsolistakin käsin
+useammallakin sovelluksella, kuten ffplay tai mpv, jos drm-tuki
+on ollut kääntäessä mukana.
+
+```sh
+mpv --vo=drm --drm-device=/dev/dri/card1 --hwdec=no bbb_sunflower_1080p_30fps_normal.mp4
+```
+
+Esimerkiksi [täältä](https://test-videos.co.uk/bigbuckbunny/mp4-h264) voit löytää testaamiseen
+hyvin sopivia videoita.
 
 ## Sysfs-rajapinnat
 
@@ -119,14 +136,21 @@ weston --backend=drm --tty=2 --seat=seat1
 |------------------|--------|--------|
 | `model`          | r--    | Mallin lyhyt nimi (esim. `MPRO-6IN8`) |
 | `description`    | r--    | Mallin kuvaus |
+| `firmware`       | r--    | Firmware |
+| `fw_minor`       | r--    | Firmware version numeron minor osa |
+| `fw_major`       | r--    | Firmware version numeron major osa |
 | `resolution`     | r--    | `WIDTH HEIGHT` |
 | `physical_size`  | r--    | `WIDTH_MM HEIGHT_MM` |
-| `version`        | r--    | Firmware-versio (hex) |
+| `width_mm`       | r--    | `WIDTH_MM` |
+| `height_mm`      | r--    | `HEIGHT_MM` |
 | `screen_id`      | r--    | Laitteen Screen ID (hex) |
+| `version_id`     | r--    | Laitteen versio ID (hex) |
 | `device_id`      | r--    | Laitteen yksilöllinen 8-tavuinen ID |
 | `margin`         | r--    | Datan margin tavuissa (0 useimmilla malleilla) |
+| `fbdev_enabled`  | r--    | Onko laitteen fbdev emulointi päällä |
 | `lz4_level`      | rw     | LZ4-pakkaus: `0`=pois, `1`=fast, `2..12`=HC |
-| `stats`          | r--    | `submitted=N displayed=N dropped=N` |
+| `fps`            | r--    | toteutunut fps |
+| `stats`          | r--    | `submitted=N displayed=N dropped=N fps=N efficiency=N` |
 
 ### DRM (`/sys/bus/platform/drivers/mpro_drm/<id>/`)
 
@@ -179,7 +203,7 @@ options mpro lz4_level=1
 
 | Parametri    | Tyyppi | Oletus | Kuvaus |
 |--------------|--------|--------|--------|
-| `fbdev`      | int    | `0`    | fbdev konsoli.                                                                                     |
+| `fbdev`      | int    | `0`    | fbdev konsoli. |
 | `lz4_level`  | int    | `0`    | LZ4-pakkaus boot-asetuksena. Tukea vain firmware-versioissa ≥ 0.22 ja malleissa ilman marginaalia. |
 
 ### `mpro_drm`
@@ -187,6 +211,13 @@ options mpro lz4_level=1
 | Parametri          | Tyyppi | Oletus | Kuvaus |
 |--------------------|--------|--------|--------|
 | `disable_partial`  | bool   | `0`    | Pakota täyspäivitykset. Tarvitaan vanhoissa firmware-versioissa (≤ 0.15). |
+
+### `mpro_backlight`
+
+| Parametri            | Tyyppi | Oletus | Kuvaus |
+|----------------------|--------|--------|--------|
+| `default_brightness` | int    | `100`  | Ruudun taustavalon oletus valoisuus arvo |
+| `default_gamma`      | int    | `100`  | Ruudun taustavalon oletus gamma arvo |
 
 ## Suorituskyky
 
@@ -213,7 +244,7 @@ Tasot:
 - `1` = LZ4 default (nopein, kohtuullinen pakkaussuhde — suositeltu)
 - `2..12` = LZ4HC (parempi pakkaussuhde, hitaampi)
 
-LZ4 ei toimi marginaalia käyttävissä malleissa (vanhat MPRO-5-yksiköt).
+LZ4 ei toimi marginaalia käyttävissä malleissa (vanhat MPRO-5-yksiköt tai vanhemmat firmwaret).
 
 ## Virransäästö
 
@@ -328,10 +359,13 @@ USB-funktioita suoraan.
 
 ```
 mpro/
+├── LICENSE
+├── README.md
 ├── Makefile, Kbuild
+├── dkms.conf
 ├── mpro.h                      # julkinen API child-drivereille
 ├── mpro_internal.h             # sisäiset protokolla-määritelmät
-├── mpro_core.c                 # USB probe/disconnect/PM, MFD-rekisteröinti
+├── mpro_main.c                 # USB probe/disconnect/PM, MFD-rekisteröinti
 ├── mpro_protocol.c             # synkroniset kontrolli-komennot
 ├── mpro_pipeline.c             # asynkroninen frame-pipeline + LZ4
 ├── mpro_model.c                # mallitaulukko + tunnistus
@@ -397,4 +431,4 @@ Oskari Rauta — `<oskari.rauta@gmail.com>`
 
 Pohjautuu osittain VoCoren alkuperäiseen `mpro_drm`-ajuriin
 (<https://github.com/Vonger/mpro_drm>) ja `v2scrctl`-userspace-paketin
-LZ4- sekä multitouch-koodiin.
+LZ4- sekä multitouch-koodiin ja firmware version purku metodiin.
