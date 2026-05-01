@@ -1,5 +1,6 @@
 Lindent
 tests
+tests/*.mp4
 *.o
 *.ko
 *.mod
