@@ -156,6 +156,7 @@ Some sample videos can be found from
 | `lz4_level`      | rw   | LZ4 compression: `0`=off, `1`=fast, `2..12`=HC             |
 | `fps`            | r--  | Measured frames per second sent to the device              |
 | `stats`          | r--  | `submitted=N displayed=N dropped=N fps=N efficiency=N`     |
+| 'reset_stats'    | -w-  | Reset statistic counters by writing 1 to this attribute    |
 
 ### DRM (`/sys/bus/platform/drivers/mpro_drm/<id>/`)
 

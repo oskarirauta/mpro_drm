@@ -212,9 +212,20 @@ static ssize_t fps_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+	u64 now_ns, last_ns;
 	u32 period_ns;
 	u64 fps_x100;
 	unsigned long flags;
+
+	/* Aikaleima viimeisestä framesta. Jos siitä on yli 2 sekuntia,
+	 * EWMA-arvo on vanhentunut → näytetään 0. */
+	last_ns = atomic64_read(&mpro->last_frame_ns);
+	if (!last_ns)
+		return sysfs_emit(buf, "0.00\n");
+
+	now_ns = ktime_get_ns();
+	if (now_ns - last_ns > 2ULL * NSEC_PER_SEC)
+		return sysfs_emit(buf, "0.00\n");
 
 	spin_lock_irqsave(&mpro->fps_lock, flags);
 	period_ns = mpro->ewma_period_ns;
@@ -238,6 +249,7 @@ static ssize_t stats_show(struct device *dev,
 	u32 efficiency = 0;
 	u32 period_ns;
 	u32 fps_x100 = 0;
+	u64 now_ns, last_ns;
 	unsigned long flags;
 
 	submitted = atomic_read(&mpro->stats_submitted);
@@ -247,13 +259,20 @@ static ssize_t stats_show(struct device *dev,
 	if (submitted > 0)
 		efficiency = (u32)div_u64((u64)displayed * 10000, submitted);
 
-	spin_lock_irqsave(&mpro->fps_lock, flags);
-	period_ns = mpro->ewma_period_ns;
-	spin_unlock_irqrestore(&mpro->fps_lock, flags);
+	/* Tarkista onko fps vanhentunut */
+	last_ns = atomic64_read(&mpro->last_frame_ns);
+	if (last_ns) {
 
-	if (period_ns) {
-		u64 num = (u64)NSEC_PER_SEC * 100;
-		fps_x100 = (u32)div_u64(num, period_ns);
+		now_ns = ktime_get_ns();
+		if (now_ns - last_ns <= 2ULL * NSEC_PER_SEC) {
+
+			spin_lock_irqsave(&mpro->fps_lock, flags);
+			period_ns = mpro->ewma_period_ns;
+			spin_unlock_irqrestore(&mpro->fps_lock, flags);
+
+			if (period_ns)
+				fps_x100 = (u32)div_u64((u64)NSEC_PER_SEC * 100, period_ns);
+		}
 	}
 
 	return sysfs_emit(buf,
@@ -265,6 +284,32 @@ static ssize_t stats_show(struct device *dev,
 }
 
 static DEVICE_ATTR_RO(stats);
+
+static ssize_t reset_stats_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	bool val;
+
+	if (kstrtobool(buf, &val))
+		return -EINVAL;
+
+	if (val) {
+		atomic_set(&mpro->stats_submitted, 0);
+		atomic_set(&mpro->stats_displayed, 0);
+		atomic_set(&mpro->stats_dropped, 0);
+		/* fps EWMA nollataan myös */
+		atomic64_set(&mpro->last_frame_ns, 0);
+		spin_lock(&mpro->fps_lock);
+		mpro->ewma_period_ns = 0;
+		spin_unlock(&mpro->fps_lock);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_WO(reset_stats);
 
 static struct attribute *mpro_attrs[] = {
 	&dev_attr_model.attr,
@@ -284,6 +329,7 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_fw_major.attr,
 	&dev_attr_fps.attr,
 	&dev_attr_stats.attr,
+	&dev_attr_reset_stats.attr,
 	NULL,
 };
 
