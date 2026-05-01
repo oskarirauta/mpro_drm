@@ -430,5 +430,5 @@ GPL-2.0. Katso lähdetiedostojen `SPDX-License-Identifier`-rivit.
 Oskari Rauta — `<oskari.rauta@gmail.com>`
 
 Pohjautuu osittain VoCoren alkuperäiseen `mpro_drm`-ajuriin
-(<https://github.com/Vonger/mpro_drm>) ja `v2scrctl`-userspace-paketin
+(<https://github.com/Vonger/mpro_drm>) ja [v2scrctl-userspace-paketin](https://vocore.io/misc/v2scrctl.zip)
 LZ4- sekä multitouch-koodiin ja firmware version purku metodiin.
