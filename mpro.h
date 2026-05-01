@@ -13,6 +13,7 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#include <linux/string.h>
 
 #ifndef MPRO_BPP
 #define MPRO_BPP			16
@@ -142,6 +143,9 @@ int mpro_get_firmware(struct mpro_device *mpro);
 bool mpro_firmware_supports_lz4(const struct mpro_device *mpro);
 int  mpro_lz4_workmem_alloc(struct mpro_device *mpro);
 
+/* Color helpers (mpro_color.c) */
+u8 mpro_pow_lut(u32 x, u32 g_x100);
+
 /*
  * Async frame submission (mpro_pipeline.c) — non-blocking, latest-wins.
  * Caller's data is copied internally so it may be freed/reused
@@ -173,5 +177,47 @@ void mpro_screen_listener_unregister(struct mpro_device *mpro,
 				     struct mpro_screen_listener *l);
 void mpro_screen_notify_off(struct mpro_device *mpro);
 void mpro_screen_notify_on(struct mpro_device *mpro);
+
+/*
+ * Parse a gamma value formatted as "N", "N.M", or "N.MM" into an
+ * integer gamma * 100. Returns 0 on success, -EINVAL on parse error.
+ *
+ *   "1"     -> 100
+ *   "1.5"   -> 150
+ *   "1.50"  -> 150
+ *   "0.75"  -> 75
+ *   "1.234" -> -EINVAL (too many fractional digits)
+ *
+ * Range validation is left to the caller — different child drivers
+ * may impose different bounds.
+ */
+static inline int mpro_parse_gamma_x100(const char *buf, u32 *out)
+{
+	unsigned int whole, frac = 0;
+	const char *dot;
+	int frac_digits = 0;
+	int n;
+
+	dot = strchr(buf, '.');
+	n = sscanf(buf, "%u.%u", &whole, &frac);
+	if (n < 1)
+		return -EINVAL;
+
+	if (n == 2 && dot) {
+		const char *p = dot + 1;
+
+		while (*p >= '0' && *p <= '9') {
+			frac_digits++;
+			p++;
+		}
+		if (frac_digits == 1)
+			frac *= 10;		/* "2.5" → 50 (i.e. 0.50) */
+		else if (frac_digits > 2)
+			return -EINVAL;
+	}
+
+	*out = whole * 100 + frac;
+	return 0;
+}
 
 #endif /* _MPRO_H_ */

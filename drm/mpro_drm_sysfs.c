@@ -164,36 +164,18 @@ static ssize_t gamma_store(struct device *dev,
 			   const char *buf, size_t count)
 {
 	struct mpro_drm *mdrm = dev_get_drvdata(dev);
-	unsigned int whole, frac = 0;
-	const char *dot;
-	int n;
-	int frac_digits = 0;
+	u32 new_gamma;
+	int ret;
 
-	dot = strchr(buf, '.');
-	n = sscanf(buf, "%u.%u", &whole, &frac);
+	ret = mpro_parse_gamma_x100(buf, &new_gamma);
+	if (ret)
+		return ret;
 
-	if (n < 1)
+	if (new_gamma < 50 || new_gamma > 400)
 		return -EINVAL;
 
-	if (n == 2 && dot) {
-		/* Count digits after the decimal point */
-		const char *p = dot + 1;
-
-		while (*p && *p >= '0' && *p <= '9') {
-			frac_digits++;
-			p++;
-		}
-		if (frac_digits == 1)
-			frac *= 10;	/* "2.5" → 50 (i.e. 0.50) */
-		else if (frac_digits > 2)
-			frac /= int_pow(10, frac_digits - 2);
-	}
-
-	mdrm->gamma_x100 = whole * 100 + frac;
-	if (mdrm->gamma_x100 < 50 || mdrm->gamma_x100 > 400)
-		return -EINVAL;
-
-	mpro_drm__build_power_lut(mdrm, mdrm->gamma_x100);
+	mdrm->gamma_x100 = new_gamma;
+	mpro_drm__build_power_lut(mdrm, new_gamma);
 	return count;
 }
 static DEVICE_ATTR_RW(gamma);

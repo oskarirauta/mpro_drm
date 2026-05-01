@@ -15,7 +15,6 @@
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/math.h>
 #include <linux/string.h>
 #include <linux/stringify.h>
 
@@ -48,40 +47,6 @@ MODULE_PARM_DESC(default_gamma,
 /* ------------------------------------------------------------------ */
 
 /*
- * y = round(255 * (x/255)^(g_x100/100))
- *
- * Same formula as mpro_drm__pow_lut() in mpro_drm_color.c, duplicated
- * so the backlight module is independent of the DRM module (they are
- * not required to be loaded together). The formula is short enough
- * that a shared header is not worth the cross-module dependency.
- */
-static u8 mpro_bl__pow_curve(u32 x, u32 g_x100)
-{
-	u32 n = g_x100 / 100;
-	u32 f = g_x100 % 100;
-	u64 y_n, y_np1, y;
-
-	if (x == 0)
-		return 0;
-	if (x >= 255)
-		return 255;
-	if (g_x100 == 100)
-		return (u8)x;
-
-	if (n == 0)
-		y_n = 255;
-	else
-		y_n = div64_u64(int_pow(x, n), int_pow(255, n - 1));
-
-	y_np1 = div64_u64(int_pow(x, n + 1), int_pow(255, n));
-
-	y = (y_n * (100 - f) + y_np1 * f) / 100;
-	if (y > 255)
-		y = 255;
-	return (u8)y;
-}
-
-/*
  * Apply the gamma curve to a raw value before sending it to the device.
  *   raw 0..255 -> device 0..255
  *   device = 255 * (raw/255)^(gamma/100)
@@ -98,7 +63,7 @@ static u8 mpro_bl__curve(struct mpro_backlight *mb, u8 raw)
 	if (g == 100 || raw == 0 || raw == 255)
 		return raw;
 
-	return mpro_bl__pow_curve(raw, g);
+	return mpro_pow_lut(raw, g);
 }
 
 /* ------------------------------------------------------------------ */
@@ -191,33 +156,13 @@ static ssize_t gamma_store(struct device *dev,
 {
 	struct backlight_device *bl = to_backlight_device(dev);
 	struct mpro_backlight *mb = bl_get_data(bl);
-	unsigned int whole, frac = 0;
-	const char *dot;
-	int n;
 	u32 new_gamma;
+	int ret;
 
-	n = sscanf(buf, "%u.%u", &whole, &frac);
-	if (n < 1)
-		return -EINVAL;
+	ret = mpro_parse_gamma_x100(buf, &new_gamma);
+	if (ret)
+		return ret;
 
-	if (n == 2) {
-		dot = strchr(buf, '.');
-		if (dot) {
-			const char *p = dot + 1;
-			int frac_digits = 0;
-
-			while (*p >= '0' && *p <= '9') {
-				frac_digits++;
-				p++;
-			}
-			if (frac_digits == 1)
-				frac *= 10;
-			else if (frac_digits > 2)
-				return -EINVAL;
-		}
-	}
-
-	new_gamma = whole * 100 + frac;
 	if (new_gamma < MPRO_BL_GAMMA_MIN || new_gamma > MPRO_BL_GAMMA_MAX)
 		return -EINVAL;
 
