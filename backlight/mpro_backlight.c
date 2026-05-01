@@ -8,13 +8,15 @@
  * havaitseman kirkkauden lineaarisemmaksi tekemiseen.
  *
  * Laitteella ei ole readback:iä taustavalon arvolle, joten asetamme
- * oletusarvon (50%) probe-vaiheessa.
+ * oletusarvon probe-vaiheessa. Oletusarvon voi konfiguroida
+ * default_brightness-parametrillä; gamma vastaavasti default_gamma:lla.
  */
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/math.h>
 #include <linux/string.h>
+#include <linux/stringify.h>
 
 #include "mpro_backlight.h"
 
@@ -22,13 +24,23 @@
 /* Module parameters                                                  */
 /* ------------------------------------------------------------------ */
 
-static int mpro_bl_default = MPRO_BL_DEFAULT;
-module_param_named(default_brightness, mpro_bl_default, int, 0444);
+static int mpro_bl_default_brightness = MPRO_BL_DEFAULT;
+module_param_named(default_brightness, mpro_bl_default_brightness, int, 0444);
 MODULE_PARM_DESC(default_brightness,
 	"Initial backlight brightness on probe (0..255, default "
-	__stringify(MPRO_BL_DEFAULT) "). The device has no readback for "
-	"the current brightness, so this value is sent on each probe. "
-	"Can be set on the kernel command line: mpro_backlight.default_brightness=N");
+	__stringify(MPRO_BL_DEFAULT) "). The device has no readback "
+	"for the current brightness, so this value is sent on each probe. "
+	"Can be set on the kernel command line: "
+	"mpro_backlight.default_brightness=N");
+
+static int mpro_bl_default_gamma = MPRO_BL_GAMMA_DEFAULT;
+module_param_named(default_gamma, mpro_bl_default_gamma, int, 0444);
+MODULE_PARM_DESC(default_gamma,
+	"Initial gamma curve, multiplied by 100 (50..400, default "
+	__stringify(MPRO_BL_GAMMA_DEFAULT) " = 1.00 linear). "
+	"Higher values make low brightness perceive smoother. "
+	"Can be set on the kernel command line: "
+	"mpro_backlight.default_gamma=N");
 
 /* ------------------------------------------------------------------ */
 /* Gamma curve                                                        */
@@ -53,7 +65,7 @@ static u8 mpro_bl__pow_curve(u32 x, u32 g_x100)
 	if (x >= 255)
 		return 255;
 	if (g_x100 == 100)
-		return (u8) x;
+		return (u8)x;
 
 	if (n == 0)
 		y_n = 255;
@@ -65,7 +77,7 @@ static u8 mpro_bl__pow_curve(u32 x, u32 g_x100)
 	y = (y_n * (100 - f) + y_np1 * f) / 100;
 	if (y > 255)
 		y = 255;
-	return (u8) y;
+	return (u8)y;
 }
 
 /*
@@ -98,7 +110,7 @@ static int mpro_bl__send_value(struct mpro_backlight *mb, u8 raw)
 	 *   [1] = 0x51 (komento-byte)
 	 *   [2] = 0x02 (alikomento: backlight)
 	 *   [3..5] = nolla
-	 *   [6] = brightness 0..255
+	 *   [6] = brightness 0..255 (gamma-korjattu)
 	 *   [7] = nolla
 	 */
 	u8 cmd[8] = { 0x00, 0x51, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -116,7 +128,7 @@ static int mpro_bl__update(struct backlight_device *bl)
 {
 	struct mpro_backlight *mb = bl_get_data(bl);
 	int requested = backlight_get_brightness(bl);
-	u8 value = (u8) clamp(requested, 0, MPRO_BL_MAX);
+	u8 value = (u8)clamp(requested, 0, MPRO_BL_MAX);
 	int ret = 0;
 
 	mutex_lock(&mb->lock);
@@ -215,7 +227,6 @@ static ssize_t gamma_store(struct device *dev,
 
 	return count;
 }
-
 static DEVICE_ATTR_RW(gamma);
 
 static struct attribute *mpro_bl__attrs[] = {
@@ -236,37 +247,52 @@ static int mpro_bl__probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct mpro_device *mpro = dev_get_drvdata(dev->parent);
 	struct backlight_properties props = {
-		.type = BACKLIGHT_RAW,
-		.scale = BACKLIGHT_SCALE_LINEAR,
-		.max_brightness = MPRO_BL_MAX,
-		.brightness = mpro_bl_default,
+		.type		= BACKLIGHT_RAW,
+		.scale		= BACKLIGHT_SCALE_LINEAR,
+		.max_brightness	= MPRO_BL_MAX,
 	};
 	struct mpro_backlight *mb;
 	char name[64];
+	u8 initial_brightness;
+	u32 initial_gamma;
 	int ret;
-	u8 initial;
 
 	if (!mpro)
 		return -ENODEV;
 
-	/* Validoi parametri — clampataan turvalliseen rajaan */
-	if (mpro_bl_default < 0 || mpro_bl_default > MPRO_BL_MAX) {
+	/* Validoi parametrit; clampataan turvallisiin rajoihin */
+	if (mpro_bl_default_brightness < 0 ||
+	    mpro_bl_default_brightness > MPRO_BL_MAX) {
 		dev_warn(dev,
 			 "default_brightness=%d invalid, clamping to 0..%u\n",
-			 mpro_bl_default, MPRO_BL_MAX);
-		mpro_bl_default = clamp(mpro_bl_default, 0, MPRO_BL_MAX);
+			 mpro_bl_default_brightness, MPRO_BL_MAX);
+		mpro_bl_default_brightness =
+			clamp(mpro_bl_default_brightness, 0, MPRO_BL_MAX);
 	}
+	initial_brightness = (u8)mpro_bl_default_brightness;
 
-	initial = (u8)mpro_bl_default;
+	if (mpro_bl_default_gamma < MPRO_BL_GAMMA_MIN ||
+	    mpro_bl_default_gamma > MPRO_BL_GAMMA_MAX) {
+		dev_warn(dev,
+			 "default_gamma=%d invalid (must be %d..%d), "
+			 "using %d\n",
+			 mpro_bl_default_gamma,
+			 MPRO_BL_GAMMA_MIN, MPRO_BL_GAMMA_MAX,
+			 MPRO_BL_GAMMA_DEFAULT);
+		mpro_bl_default_gamma = MPRO_BL_GAMMA_DEFAULT;
+	}
+	initial_gamma = (u32)mpro_bl_default_gamma;
+
+	props.brightness = initial_brightness;
 
 	mb = devm_kzalloc(dev, sizeof(*mb), GFP_KERNEL);
 	if (!mb)
 		return -ENOMEM;
 
-	mb->mpro = mpro;
-	mb->screen_on = true;
-	mb->stored_value = initial;
-	mb->gamma_x100 = MPRO_BL_GAMMA_DEFAULT;
+	mb->mpro		= mpro;
+	mb->screen_on		= true;
+	mb->stored_value	= initial_brightness;
+	mb->gamma_x100		= initial_gamma;
 	mutex_init(&mb->lock);
 
 	snprintf(name, sizeof(name), "mpro-%s", dev_name(dev->parent));
@@ -279,9 +305,9 @@ static int mpro_bl__probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mb);
 
-	mb->listener.screen_off = mpro_bl__screen_off;
-	mb->listener.screen_on = mpro_bl__screen_on;
-	mb->listener.priv = mb;
+	mb->listener.screen_off	= mpro_bl__screen_off;
+	mb->listener.screen_on	= mpro_bl__screen_on;
+	mb->listener.priv	= mb;
 
 	ret = mpro_screen_listener_register(mpro, &mb->listener);
 	if (ret)
@@ -289,7 +315,7 @@ static int mpro_bl__probe(struct platform_device *pdev)
 				     "screen listener register failed\n");
 
 	/* Aseta laite oletusarvoon — laitteella ei ole readback:iä */
-	mpro_bl__send_value(mb, initial);
+	mpro_bl__send_value(mb, initial_brightness);
 
 	ret = sysfs_create_group(&pdev->dev.kobj, &mpro_bl__attr_group);
 	if (ret) {
@@ -297,8 +323,11 @@ static int mpro_bl__probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "sysfs create failed\n");
 	}
 
-	dev_info(dev, "backlight registered: %s (default %u/%u)\n",
-		 name, MPRO_BL_DEFAULT, MPRO_BL_MAX);
+	dev_info(dev,
+		 "backlight registered: %s "
+		 "(brightness %u/%u, gamma %u.%02u)\n",
+		 name, initial_brightness, MPRO_BL_MAX,
+		 initial_gamma / 100, initial_gamma % 100);
 	return 0;
 }
 
@@ -315,11 +344,10 @@ static void mpro_bl__remove(struct platform_device *pdev)
 }
 
 static struct platform_driver mpro_bl__driver = {
-	.probe = mpro_bl__probe,
-	.remove = mpro_bl__remove,
-	.driver = {.name = "mpro_backlight" },
+	.probe	= mpro_bl__probe,
+	.remove	= mpro_bl__remove,
+	.driver	= { .name = "mpro_backlight" },
 };
-
 module_platform_driver(mpro_bl__driver);
 
 MODULE_AUTHOR("Oskari Rauta");
