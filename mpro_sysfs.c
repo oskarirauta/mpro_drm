@@ -275,13 +275,24 @@ static ssize_t idle_state_store(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct mpro_device *mpro = dev_get_drvdata(dev);
+	bool val;
 
-	if (sysfs_streq(buf, "idle"))
+	if (sysfs_streq(buf, "idle")) {
 		mpro_pm_force_idle(mpro);
-	else if (sysfs_streq(buf, "active"))
+	} else if (sysfs_streq(buf, "active")) {
 		mpro_pm_force_active(mpro);
-	else
+	} else if (!kstrtobool(buf, &val)) {
+		/*
+		 * Numeric form: 1 = active, 0 = idle. Also accepts
+		 * "y"/"n", "true"/"false" via kstrtobool.
+		 */
+		if (val)
+			mpro_pm_force_active(mpro);
+		else
+			mpro_pm_force_idle(mpro);
+	} else {
 		return -EINVAL;
+	}
 
 	return count;
 }
