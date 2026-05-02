@@ -91,6 +91,7 @@ struct mpro_touch {
 	/* Release watchdog — safety net for a missing state=1 packet */
 	struct timer_list		release_timer;
 	bool				any_active;
+	bool				pm_active;
 };
 
 #endif /* _MPRO_TOUCHSCREEN_H_ */

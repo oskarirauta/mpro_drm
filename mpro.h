@@ -125,6 +125,8 @@ struct mpro_device {
 	atomic_t		active_refs;	/* references from children */
 	bool			is_idle;	/* protected by listeners_lock */
 	u32			idle_delay_ms;	/* 0 = disabled */
+	bool			touch_wake_enabled;
+	struct work_struct	wake_work;
 
 	/* FPS tracking — EWMA of inter-frame deltas */
 	atomic64_t last_frame_ns; /* timestamp of last frame */
@@ -179,6 +181,7 @@ void mpro_active_get(struct mpro_device *mpro, bool *held);
 void mpro_active_put(struct mpro_device *mpro, bool *held);
 void mpro_pm_force_idle(struct mpro_device *mpro);
 void mpro_pm_force_active(struct mpro_device *mpro);
+void mpro_pm_wake_async(struct mpro_device *mpro);
 
 /* Screen state listeners (mpro_screen.c) */
 int  mpro_screen_listener_register(struct mpro_device *mpro,

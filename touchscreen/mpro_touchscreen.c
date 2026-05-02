@@ -173,6 +173,15 @@ static void mpro_ts__handle_packet(struct mpro_touch *mt,
 	input_sync(input);
 
 	/*
+	 * If a real touch arrived while the display was idle, wake it.
+	 * mpro_pm_wake_async() is safe from URB-completion context — it
+	 * defers the actual wake to a workqueue. The wake handler is
+	 * idempotent so concurrent touches don't cause issues.
+	 */
+	if (any_active && READ_ONCE(mt->mpro->touch_wake_enabled))
+		mpro_pm_wake_async(mt->mpro);
+
+	/*
 	 * Release watchdog: the firmware sends a state=1 packet when a
 	 * finger is lifted, which releases the touch immediately above.
 	 * The watchdog timer is only a safety net for the case where a
@@ -336,6 +345,15 @@ static void mpro_ts__input_close(struct input_dev *input)
 static void mpro_ts__screen_off(void *priv)
 {
 	struct mpro_touch *mt = priv;
+
+	if (READ_ONCE(mt->mpro->touch_wake_enabled)) {
+		/*
+		 * Keep the URB running while the display is idle so a
+		 * touch can wake the display. The packet handler calls
+		 * mpro_pm_wake_async() on the first real touch.
+		 */
+		return;
+	}
 
 	mutex_lock(&mt->lock);
 	mt->screen_on = false;

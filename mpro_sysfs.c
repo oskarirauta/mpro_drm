@@ -296,6 +296,56 @@ static ssize_t active_refs_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(active_refs);
 
+static ssize_t touch_wake_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(mpro->touch_wake_enabled));
+}
+
+static ssize_t touch_wake_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	bool val;
+
+	if (kstrtobool(buf, &val))
+		return -EINVAL;
+
+	WRITE_ONCE(mpro->touch_wake_enabled, val);
+
+	/*
+	 * If the user disables touch-wake while the display is
+	 * currently idle, stop the touchscreen URB pipeline so the
+	 * device can fully idle. The screen-state listener path
+	 * handles this — re-notify off so touchscreen reacts.
+	 *
+	 * If the user enables touch-wake, do nothing here: the
+	 * change takes effect on the next idle cycle. The current
+	 * idle session won't restart the URB, but that's fine —
+	 * users can echo "active" to idle_state to reset.
+	 */
+	if (!val) {
+		mutex_lock(&mpro->listeners_lock);
+		if (mpro->is_idle) {
+			mutex_unlock(&mpro->listeners_lock);
+			/*
+			 * Re-fire screen_off so touchscreen sees the
+			 * new touch_wake_enabled value and stops its
+			 * URB. Backlight is already off.
+			 */
+			mpro_screen_notify_off(mpro);
+		} else {
+			mutex_unlock(&mpro->listeners_lock);
+		}
+	}
+
+	return count;
+}
+static DEVICE_ATTR_RW(touch_wake);
+
 static ssize_t fps_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
@@ -419,6 +469,7 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_idle_delay_ms.attr,
 	&dev_attr_idle_state.attr,
 	&dev_attr_active_refs.attr,
+	&dev_attr_touch_wake.attr,
 	&dev_attr_fps.attr,
 	&dev_attr_stats.attr,
 	&dev_attr_reset_stats.attr,

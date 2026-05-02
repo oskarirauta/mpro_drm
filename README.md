@@ -137,27 +137,31 @@ Some sample videos can be found from
 
 ### Parent driver (`/sys/bus/usb/drivers/mpro/<usb-id>/`)
 
-| File             | Mode | Description                                                |
-| ---------------- | ---- | ---------------------------------------------------------- |
-| `model`          | r--  | Short model name (e.g. `MPRO-6IN8`)                        |
-| `description`    | r--  | Human-readable model description                           |
-| `firmware`       | r--  | Firmware version string as reported by the device          |
-| `fw_major`       | r--  | Parsed firmware version, major number                      |
-| `fw_minor`       | r--  | Parsed firmware version, minor number                      |
-| `resolution`     | r--  | `WIDTH HEIGHT` in pixels                                   |
-| `physical_size`  | r--  | `WIDTH_MM HEIGHT_MM`                                       |
-| `width_mm`       | r--  | `WIDTH_MM` (separate field for convenience)                |
-| `height_mm`      | r--  | `HEIGHT_MM` (separate field for convenience)               |
-| `screen_id`      | r--  | Device's Screen ID (hex)                                   |
-| `version_id`     | r--  | Device's hardware version ID (hex)                         |
-| `device_id`      | r--  | Device's unique 8-byte ID                                  |
-| `margin`         | r--  | Frame margin in bytes (0 on most models)                   |
-| `fbdev_enabled`  | r--  | Whether fbdev console emulation is enabled                 |
-| `lz4_level`      | rw   | LZ4 compression: `0`=off, `1`=fast, `2..12`=HC             |
-| `lz4_threshold`  | rw   | LZ4 compression threshold for compression                  |
-| `fps`            | r--  | Measured frames per second sent to the device              |
-| `stats`          | r--  | `submitted=N displayed=N dropped=N fps=N efficiency=N`     |
-| 'reset_stats'    | -w-  | Reset statistic counters by writing 1 to this attribute    |
+| File             | Mode | Description                                                                  |
+| ---------------- | ---- | ---------------------------------------------------------------------------- |
+| `model`          | r--  | Short model name (e.g. `MPRO-6IN8`)                                          |
+| `description`    | r--  | Human-readable model description                                             |
+| `firmware`       | r--  | Firmware version string as reported by the device                            |
+| `fw_major`       | r--  | Parsed firmware version, major number                                        |
+| `fw_minor`       | r--  | Parsed firmware version, minor number                                        |
+| `resolution`     | r--  | `WIDTH HEIGHT` in pixels                                                     |
+| `physical_size`  | r--  | `WIDTH_MM HEIGHT_MM`                                                         |
+| `width_mm`       | r--  | `WIDTH_MM` (separate field for convenience)                                  |
+| `height_mm`      | r--  | `HEIGHT_MM` (separate field for convenience)                                 |
+| `screen_id`      | r--  | Device's Screen ID (hex)                                                     |
+| `version_id`     | r--  | Device's hardware version ID (hex)                                           |
+| `device_id`      | r--  | Device's unique 8-byte ID                                                    |
+| `margin`         | r--  | Frame margin in bytes (0 on most models)                                     |
+| `fbdev_enabled`  | r--  | Whether fbdev console emulation is enabled                                   |
+| `lz4_level`      | rw   | LZ4 compression: `0`=off, `1`=fast, `2..12`=HC                               |
+| `lz4_threshold`  | rw   | LZ4 compression threshold for compression                                    |
+| `idle_delay_ms`  | rw   | Idle delay in ms before backlight is switched off (0 = disabled)             |
+| `idle_state`     | rw   | Read: `active` or `idle`. Write: force the state.                            |
+| `active_refs`    | r--  | Number of children currently holding an active reference                     |
+| `touch_wake`     | rw   | Wake the display from virtual idle on touch (requires `mpro_touchscreen.ko`) |
+| `fps`            | r--  | Measured frames per second sent to the device                                |
+| `stats`          | r--  | `submitted=N displayed=N dropped=N fps=N efficiency=N`                       |
+| 'reset_stats'    | -w-  | Reset statistic counters by writing 1 to this attribute                      |
 
 ### DRM (`/sys/bus/platform/drivers/mpro_drm/<id>/`)
 
@@ -208,11 +212,13 @@ options mpro lz4_level=1
 options mpro lz4_threshold=2048
 ```
 
-| Parameter       | Type | Default | Description                                                                                  |
-| --------------- | ---- | ------- | -------------------------------------------------------------------------------------------- |
-| `fbdev`         | int  | `0`     | Enable fbdev console emulation. Disables USB autosuspend.                                    |
-| `lz4_level`     | int  | `0`     | LZ4 compression level at boot. Requires firmware ≥ 0.22 and a non-margin model.              |
-| `lz4_threshold` | int  | `1024`  | LZ4 compression threshold, do not compress transfers below this size.                        |
+| Parameter       | Type | Default | Description                                                                                       |
+| --------------- | ---- | ------- | ------------------------------------------------------------------------------------------------- |
+| `fbdev`         | int  | `0`     | Enable fbdev console emulation. Disables USB autosuspend.                                         |
+| `lz4_level`     | int  | `0`     | LZ4 compression level at boot. Requires firmware ≥ 0.22 and a non-margin model.                   |
+| `lz4_threshold` | int  | `1024`  | LZ4 compression threshold, do not compress transfers below this size.                             |
+| `idle_delay_ms` | uint | `30000` | Initial idle delay before the display goes idle (backlight off, touch URB stopped). 0 = disabled. |
+| `touch_wake`     | bool | `1`     | Wake the display from virtual idle when the touchscreen is touched. Default: enabled.            |
 
 ### `mpro_drm`
 
@@ -306,6 +312,40 @@ Or at runtime via sysfs:
 
     echo idle > /sys/bus/usb/drivers/mpro/<id>/idle_state    # force idle now
     echo active > /sys/bus/usb/drivers/mpro/<id>/idle_state  # force active now
+
+### Wake on touch
+
+By default, touching the screen wakes the display from idle. This
+requires the `mpro_touchscreen.ko` module to be loaded — the
+parameter is set on the parent (`mpro`), but the wake mechanism
+relies on the touchscreen URB pipeline, which is provided by the
+child module.
+
+If `mpro_touchscreen` is not loaded, the `touch_wake` setting has
+no effect and the display will only wake when the DRM pipe is
+re-enabled (e.g. when a compositor opens it).
+
+#### Setting at module load:
+
+    options mpro touch_wake=0
+
+#### Setting at runtime via sysfs:
+
+    cat /sys/bus/usb/drivers/mpro/<id>/touch_wake     # 0 or 1
+    echo 0 > /sys/bus/usb/drivers/mpro/<id>/touch_wake
+    echo 1 > /sys/bus/usb/drivers/mpro/<id>/touch_wake
+
+The runtime change takes effect on the next idle cycle. To force
+the change to take effect immediately, manually toggle the idle
+state:
+
+    echo active > /sys/bus/usb/drivers/mpro/<id>/idle_state
+
+Note: this wake mechanism is independent of system suspend (S3,
+hibernate). The device firmware does not advertise USB remote
+wakeup (`bmAttributes & 0x20 == 0` in the configuration
+descriptor), so a touch cannot wake the host from system suspend
+— only from the driver's virtual idle state.
 
 ### fbdev console mode
 

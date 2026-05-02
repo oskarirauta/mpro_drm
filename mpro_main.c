@@ -49,6 +49,13 @@ MODULE_PARM_DESC(idle_delay_ms,
 	"idle (backlight off, touch URB stopped). 0 = disabled. "
 	"Default: 30000.");
 
+static bool mpro_touch_wake = true;
+module_param_named(touch_wake, mpro_touch_wake, bool, 0644);
+MODULE_PARM_DESC(touch_wake,
+	"Wake the display from virtual idle when the touchscreen is "
+	"touched. Keeps the touchscreen URB pipeline running even "
+	"while the display is idle. Default: 1.");
+
 /* ------------------------------------------------------------------ */
 /* MFD cells                                                          */
 /* ------------------------------------------------------------------ */
@@ -279,6 +286,7 @@ static int mpro_usb_probe(struct usb_interface *intf,
 	 * after a configurable idle period — see mpro_pm.c for details.
 	 */
 	mpro->idle_delay_ms = mpro_idle_delay_ms;
+	mpro->touch_wake_enabled = mpro_touch_wake;
 	mpro_pm_init(mpro);
 
 	if (mpro->idle_delay_ms > 0)
