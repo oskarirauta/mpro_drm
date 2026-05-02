@@ -1,0 +1,213 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * mpro_pm.c — virtual idle management for the MPro parent driver.
+ *
+ * The device firmware does not support a working USB-bus resume:
+ * once the USB host suspends the link, the device fails to respond
+ * to control transfers and the USB stack escalates to a port reset.
+ * Real USB autosuspend is therefore not usable.
+ *
+ * Instead we implement a logical idle state. The USB bus stays
+ * active, but after a configurable idle delay (default 30 s) the
+ * backlight is switched off and the touchscreen URB pipeline is
+ * stopped. This protects the device's backlight, which has a
+ * limited lifetime when left lit through long idle periods.
+ *
+ * Children take and release "active references" via mpro_active_get()
+ * and mpro_active_put(). DRM holds one across pipe_enable/pipe_disable;
+ * the touchscreen holds one across input_open/input_close. While at
+ * least one reference is held the device is considered active. When
+ * the last reference is dropped, the idle work is scheduled. The
+ * next get cancels the work, or wakes the device if it had already
+ * gone idle.
+ *
+ * USB suspend/resume callbacks remain in place for system-level PM
+ * (S3, hibernate) only — runtime autosuspend is disabled at the
+ * usb_driver level by leaving out supports_autosuspend.
+ */
+
+#include <linux/module.h>
+#include <linux/workqueue.h>
+#include <linux/ktime.h>
+#include <linux/usb.h>
+
+#include "mpro_internal.h"
+#include "mpro.h"
+
+/* ------------------------------------------------------------------ */
+/* Idle work                                                          */
+/* ------------------------------------------------------------------ */
+
+static void mpro_idle_work(struct work_struct *work)
+{
+	struct mpro_device *mpro = container_of(to_delayed_work(work),
+						struct mpro_device, idle_work);
+
+	mutex_lock(&mpro->listeners_lock);
+
+	/* Bail if a get arrived between schedule and execution */
+	if (atomic_read(&mpro->active_refs) > 0) {
+		mutex_unlock(&mpro->listeners_lock);
+		return;
+	}
+
+	if (mpro->is_idle) {
+		mutex_unlock(&mpro->listeners_lock);
+		return;
+	}
+
+	mpro->is_idle = true;
+	mutex_unlock(&mpro->listeners_lock);
+
+	dev_dbg(&mpro->intf->dev, "entering idle: backlight off\n");
+
+	/*
+	 * Push a black frame so the panel has nothing to display, then
+	 * notify listeners. Lock is dropped first because backlight
+	 * callbacks take their own locks.
+	 */
+	mpro_screen_notify_off(mpro);
+}
+
+/* ------------------------------------------------------------------ */
+/* Lifecycle                                                          */
+/* ------------------------------------------------------------------ */
+
+static void mpro_wake_work(struct work_struct *work); /* forward */
+
+void mpro_pm_init(struct mpro_device *mpro)
+{
+	INIT_DELAYED_WORK(&mpro->idle_work, mpro_idle_work);
+	INIT_WORK(&mpro->wake_work, mpro_wake_work);
+	atomic_set(&mpro->active_refs, 0);
+	mpro->is_idle = false;
+}
+EXPORT_SYMBOL_GPL(mpro_pm_init);
+
+void mpro_pm_shutdown(struct mpro_device *mpro)
+{
+	cancel_delayed_work_sync(&mpro->idle_work);
+	cancel_work_sync(&mpro->wake_work);
+}
+EXPORT_SYMBOL_GPL(mpro_pm_shutdown);
+
+/* ------------------------------------------------------------------ */
+/* Active reference management                                        */
+/* ------------------------------------------------------------------ */
+
+void mpro_active_get(struct mpro_device *mpro, bool *held)
+{
+	bool was_idle;
+
+	if (mpro->fbdev_enabled) {
+		/*
+		 * fbdev console keeps the pipe permanently active. We
+		 * still track refs (so sysfs reflects the state) but
+		 * don't schedule idle.
+		 */
+		atomic_inc(&mpro->active_refs);
+		*held = true;
+		return;
+	}
+
+	atomic_inc(&mpro->active_refs);
+	cancel_delayed_work_sync(&mpro->idle_work);
+
+	mutex_lock(&mpro->listeners_lock);
+	was_idle = mpro->is_idle;
+	mpro->is_idle = false;
+	mutex_unlock(&mpro->listeners_lock);
+
+	if (was_idle) {
+		dev_dbg(&mpro->intf->dev, "leaving idle: backlight on\n");
+		mpro_screen_notify_on(mpro);
+	}
+
+	*held = true;
+}
+EXPORT_SYMBOL_GPL(mpro_active_get);
+
+void mpro_active_put(struct mpro_device *mpro, bool *held)
+{
+	if (!*held)
+		return;
+
+	*held = false;
+
+	if (!atomic_dec_and_test(&mpro->active_refs))
+		return;
+
+	/* Last reference released */
+	if (mpro->fbdev_enabled || mpro->idle_delay_ms == 0)
+		return;
+
+	schedule_delayed_work(&mpro->idle_work,
+			      msecs_to_jiffies(mpro->idle_delay_ms));
+}
+EXPORT_SYMBOL_GPL(mpro_active_put);
+
+/* ------------------------------------------------------------------ */
+/* sysfs control — manual force idle / active                         */
+/* ------------------------------------------------------------------ */
+
+void mpro_pm_force_idle(struct mpro_device *mpro)
+{
+	cancel_delayed_work_sync(&mpro->idle_work);
+
+	mutex_lock(&mpro->listeners_lock);
+	if (mpro->is_idle) {
+		mutex_unlock(&mpro->listeners_lock);
+		return;
+	}
+	mpro->is_idle = true;
+	mutex_unlock(&mpro->listeners_lock);
+
+	mpro_screen_notify_off(mpro);
+}
+EXPORT_SYMBOL_GPL(mpro_pm_force_idle);
+
+void mpro_pm_force_active(struct mpro_device *mpro)
+{
+	bool was_idle;
+
+	cancel_delayed_work_sync(&mpro->idle_work);
+
+	mutex_lock(&mpro->listeners_lock);
+	was_idle = mpro->is_idle;
+	mpro->is_idle = false;
+	mutex_unlock(&mpro->listeners_lock);
+
+	if (was_idle)
+		mpro_screen_notify_on(mpro);
+}
+EXPORT_SYMBOL_GPL(mpro_pm_force_active);
+
+/* ------------------------------------------------------------------ */
+/* Wake-on-touch                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Workqueue handler that performs the actual wake. mpro_pm_wake_async()
+ * (called from URB-completion context) just schedules this.
+ */
+static void mpro_wake_work(struct work_struct *work)
+{
+	struct mpro_device *mpro = container_of(work, struct mpro_device,
+						wake_work);
+
+	mpro_pm_force_active(mpro);
+}
+
+/*
+ * Schedule a wake from any context. Safe to call from IRQ / atomic
+ * context — the actual wake work runs on the parent's ordered
+ * workqueue.
+ */
+void mpro_pm_wake_async(struct mpro_device *mpro)
+{
+	if (!READ_ONCE(mpro->is_idle))
+		return;
+
+	queue_work(mpro->wq, &mpro->wake_work);
+}
+EXPORT_SYMBOL_GPL(mpro_pm_wake_async);
