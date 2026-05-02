@@ -346,6 +346,68 @@ static ssize_t touch_wake_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(touch_wake);
 
+static ssize_t pm_stats_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	u64 now_ns, active_ns, idle_ns, current_ns;
+	u32 idle_count, wake_count, touch_wake_count;
+	bool is_idle;
+
+	mutex_lock(&mpro->listeners_lock);
+	now_ns = ktime_get_ns();
+	is_idle = mpro->is_idle;
+	active_ns = mpro->pm_active_total_ns;
+	idle_ns = mpro->pm_idle_total_ns;
+	current_ns = now_ns - mpro->pm_state_changed_ns;
+	idle_count = mpro->pm_idle_count;
+	wake_count = mpro->pm_wake_count;
+	touch_wake_count = mpro->pm_touch_wake_count;
+	mutex_unlock(&mpro->listeners_lock);
+
+	return sysfs_emit(buf,
+		"state=%s\n"
+		"active_time_ms=%llu\n"
+		"idle_time_ms=%llu\n"
+		"current_state_time_ms=%llu\n"
+		"idle_transitions=%u\n"
+		"wake_transitions=%u\n"
+		"touch_wakes=%u\n",
+		is_idle ? "idle" : "active",
+		div_u64(active_ns, NSEC_PER_MSEC),
+		div_u64(idle_ns, NSEC_PER_MSEC),
+		div_u64(current_ns, NSEC_PER_MSEC),
+		idle_count,
+		wake_count,
+		touch_wake_count);
+}
+static DEVICE_ATTR_RO(pm_stats);
+
+static ssize_t reset_pm_stats_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	bool val;
+
+	if (kstrtobool(buf, &val))
+		return -EINVAL;
+
+	if (val) {
+		mutex_lock(&mpro->listeners_lock);
+		mpro->pm_active_total_ns = 0;
+		mpro->pm_idle_total_ns = 0;
+		mpro->pm_state_changed_ns = ktime_get_ns();
+		mpro->pm_idle_count = 0;
+		mpro->pm_wake_count = 0;
+		mpro->pm_touch_wake_count = 0;
+		mutex_unlock(&mpro->listeners_lock);
+	}
+
+	return count;
+}
+static DEVICE_ATTR_WO(reset_pm_stats);
+
 static ssize_t fps_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
@@ -470,6 +532,8 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_idle_state.attr,
 	&dev_attr_active_refs.attr,
 	&dev_attr_touch_wake.attr,
+	&dev_attr_pm_stats.attr,
+	&dev_attr_reset_pm_stats.attr,
 	&dev_attr_fps.attr,
 	&dev_attr_stats.attr,
 	&dev_attr_reset_stats.attr,

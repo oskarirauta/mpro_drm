@@ -132,6 +132,14 @@ struct mpro_device {
 	atomic64_t last_frame_ns; /* timestamp of last frame */
 	u32 ewma_period_ns;	  /* EWMA from jiffies-delta */
 	spinlock_t fps_lock;	  /* protects ewma */
+
+	/* Virtual idle statistics — protected by listeners_lock */
+	u64			pm_active_total_ns;
+	u64			pm_idle_total_ns;
+	u64			pm_state_changed_ns;
+	u32			pm_idle_count;
+	u32			pm_wake_count;
+	u32			pm_touch_wake_count;
 };
 
 /* ------------------------------------------------------------------ */

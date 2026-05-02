@@ -3,7 +3,9 @@
 Linux kernel driver for VoCore MPro USB displays (Vendor ID `0xc872`,
 Product ID `0x1004`). The display surface is exposed through DRM/KMS,
 the backlight as a standard Linux backlight class device, and the
-two-finger touchscreen as a multitouch input device.
+two-finger touchscreen as a multitouch input device. Device does not
+survive from resume after suspending, so suspending is disabled for
+device, it is emulated by virtual idle state system.
 
 ## Supported devices
 
@@ -159,6 +161,8 @@ Some sample videos can be found from
 | `idle_state`     | rw   | Read: `active` or `idle`. Write: force the state.                            |
 | `active_refs`    | r--  | Number of children currently holding an active reference                     |
 | `touch_wake`     | rw   | Wake the display from virtual idle on touch (requires `mpro_touchscreen.ko`) |
+| `pm_stats`       | r--  | Cumulative idle/active state statistics                                      |
+| `reset_pm_stats` | -w-  | Write `1` to reset PM statistics counters                                    |
 | `fps`            | r--  | Measured frames per second sent to the device                                |
 | `stats`          | r--  | `submitted=N displayed=N dropped=N fps=N efficiency=N`                       |
 | 'reset_stats'    | -w-  | Reset statistic counters by writing 1 to this attribute                      |
@@ -218,7 +222,7 @@ options mpro lz4_threshold=2048
 | `lz4_level`     | int  | `0`     | LZ4 compression level at boot. Requires firmware ≥ 0.22 and a non-margin model.                   |
 | `lz4_threshold` | int  | `1024`  | LZ4 compression threshold, do not compress transfers below this size.                             |
 | `idle_delay_ms` | uint | `30000` | Initial idle delay before the display goes idle (backlight off, touch URB stopped). 0 = disabled. |
-| `touch_wake`     | bool | `1`     | Wake the display from virtual idle when the touchscreen is touched. Default: enabled.            |
+| `touch_wake`     | bool | `1`    | Wake the display from virtual idle when the touchscreen is touched. Default: enabled.            |
 
 ### `mpro_drm`
 
@@ -347,6 +351,42 @@ wakeup (`bmAttributes & 0x20 == 0` in the configuration
 descriptor), so a touch cannot wake the host from system suspend
 — only from the driver's virtual idle state.
 
+### Statistics
+
+The driver tracks idle/active state for diagnostics:
+
+    cat /sys/bus/usb/drivers/mpro/<id>/pm_stats
+    state=active
+    active_time_ms=125430
+    idle_time_ms=580120
+    current_state_time_ms=4150
+    idle_transitions=12
+    wake_transitions=12
+    touch_wakes=8
+
+Fields:
+
+  - `state` — current state, `active` or `idle`
+  - `active_time_ms` — total time spent in the active state across
+    completed sessions, in milliseconds
+  - `idle_time_ms` — total time spent in the idle state across
+    completed sessions, in milliseconds
+  - `current_state_time_ms` — duration of the current state
+    (not yet counted in `active_time_ms` / `idle_time_ms`)
+  - `idle_transitions` — number of active → idle transitions since
+    the last reset
+  - `wake_transitions` — number of idle → active transitions
+  - `touch_wakes` — subset of `wake_transitions` that were caused
+    by a touch event (the rest are caused by the DRM pipe or
+    touchscreen input device opening)
+
+Reset counters and timers:
+
+    echo 1 > /sys/bus/usb/drivers/mpro/<id>/reset_pm_stats
+
+After a reset, `current_state_time_ms` resumes from zero and the
+cumulative totals are cleared. The state itself is unchanged.
+
 ### fbdev console mode
 
 When `fbdev=1` is set, the kernel text console keeps the display
@@ -451,6 +491,7 @@ mpro/
 ├── mpro_main.c                 # USB probe/disconnect/PM, MFD registration
 ├── mpro_protocol.c             # synchronous control messages
 ├── mpro_pipeline.c             # async frame pipeline + LZ4
+├── mpro_pm.c                   # virtual idle state / "power management"
 ├── mpro_model.c                # model database + detection
 ├── mpro_screen.c               # screen-state callback mechanism
 ├── mpro_sysfs.c                # parent-level sysfs

@@ -35,6 +35,44 @@
 #include "mpro.h"
 
 /* ------------------------------------------------------------------ */
+/* PM statistics                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Record a state transition. Caller must hold listeners_lock and must
+ * NOT have changed mpro->is_idle yet — this helper inspects the
+ * current state to decide which counter to bump.
+ *
+ * @new_idle:   target state after the transition
+ * @touch_wake: true if this is a wake (idle -> active) caused by touch
+ */
+static void mpro_pm_record_transition(struct mpro_device *mpro,
+				      bool new_idle, bool touch_wake)
+{
+	u64 now_ns = ktime_get_ns();
+	u64 elapsed = now_ns - mpro->pm_state_changed_ns;
+
+	/* Account elapsed time to the state we're leaving */
+	if (mpro->is_idle)
+		mpro->pm_idle_total_ns += elapsed;
+	else
+		mpro->pm_active_total_ns += elapsed;
+
+	mpro->pm_state_changed_ns = now_ns;
+
+	/* Count the transition (only if we're really changing state) */
+	if (mpro->is_idle != new_idle) {
+		if (new_idle) {
+			mpro->pm_idle_count++;
+		} else {
+			mpro->pm_wake_count++;
+			if (touch_wake)
+				mpro->pm_touch_wake_count++;
+		}
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /* Idle work                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -56,6 +94,7 @@ static void mpro_idle_work(struct work_struct *work)
 		return;
 	}
 
+	mpro_pm_record_transition(mpro, true, false);
 	mpro->is_idle = true;
 	mutex_unlock(&mpro->listeners_lock);
 
@@ -81,6 +120,9 @@ void mpro_pm_init(struct mpro_device *mpro)
 	INIT_WORK(&mpro->wake_work, mpro_wake_work);
 	atomic_set(&mpro->active_refs, 0);
 	mpro->is_idle = false;
+
+	/* Counters are zero-initialised by devm_kzalloc in probe */
+	mpro->pm_state_changed_ns = ktime_get_ns();
 }
 EXPORT_SYMBOL_GPL(mpro_pm_init);
 
@@ -115,6 +157,8 @@ void mpro_active_get(struct mpro_device *mpro, bool *held)
 
 	mutex_lock(&mpro->listeners_lock);
 	was_idle = mpro->is_idle;
+	if (was_idle)
+		mpro_pm_record_transition(mpro, false, false);
 	mpro->is_idle = false;
 	mutex_unlock(&mpro->listeners_lock);
 
@@ -152,17 +196,20 @@ EXPORT_SYMBOL_GPL(mpro_active_put);
 
 void mpro_pm_force_idle(struct mpro_device *mpro)
 {
+	bool changed = false;
+
 	cancel_delayed_work_sync(&mpro->idle_work);
 
 	mutex_lock(&mpro->listeners_lock);
-	if (mpro->is_idle) {
-		mutex_unlock(&mpro->listeners_lock);
-		return;
+	if (!mpro->is_idle) {
+		mpro_pm_record_transition(mpro, true, false);
+		mpro->is_idle = true;
+		changed = true;
 	}
-	mpro->is_idle = true;
 	mutex_unlock(&mpro->listeners_lock);
 
-	mpro_screen_notify_off(mpro);
+	if (changed)
+		mpro_screen_notify_off(mpro);
 }
 EXPORT_SYMBOL_GPL(mpro_pm_force_idle);
 
@@ -174,6 +221,8 @@ void mpro_pm_force_active(struct mpro_device *mpro)
 
 	mutex_lock(&mpro->listeners_lock);
 	was_idle = mpro->is_idle;
+	if (was_idle)
+		mpro_pm_record_transition(mpro, false, false);
 	mpro->is_idle = false;
 	mutex_unlock(&mpro->listeners_lock);
 
@@ -194,8 +243,19 @@ static void mpro_wake_work(struct work_struct *work)
 {
 	struct mpro_device *mpro = container_of(work, struct mpro_device,
 						wake_work);
+	bool was_idle;
 
-	mpro_pm_force_active(mpro);
+	cancel_delayed_work_sync(&mpro->idle_work);
+
+	mutex_lock(&mpro->listeners_lock);
+	was_idle = mpro->is_idle;
+	if (was_idle)
+		mpro_pm_record_transition(mpro, false, true);  /* touch_wake */
+	mpro->is_idle = false;
+	mutex_unlock(&mpro->listeners_lock);
+
+	if (was_idle)
+		mpro_screen_notify_on(mpro);
 }
 
 /*
