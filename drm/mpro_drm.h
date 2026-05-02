@@ -84,6 +84,7 @@ struct mpro_drm {
 
 	bool				blanked;
 	bool				disable_partial;
+	bool				active_held;
 };
 
 /* ------------------------------------------------------------------ */

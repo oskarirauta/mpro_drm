@@ -271,31 +271,48 @@ echo 1 > /sys/bus/usb/drivers/mpro/3-3:1.0/reset_stats
 
 ## Power management
 
-The driver supports USB autosuspend. The device suspends automatically
-when:
+The device firmware does not implement a reliable USB-bus resume
+protocol — once the USB host puts the device into selective suspend,
+control transfers fail and the link must be reset. Real USB
+autosuspend is therefore disabled.
 
-* the DRM pipe is disabled (no compositor is drawing)
-* the touch input is closed (no userspace listener)
-* 30 seconds have passed without activity
+Instead the driver implements a virtual idle state. After a
+configurable period of inactivity, the backlight is switched off
+and the touchscreen URB pipeline is stopped. The USB bus stays
+active, so resume is instantaneous and reliable when an application
+re-opens the display or the input device.
 
-To check the current power state:
+This is essential because the device's backlight has a limited
+lifetime — leaving it lit through long idle periods (e.g. overnight)
+shortens it noticeably.
 
-```sh
-USBDEV=$(readlink -f /sys/bus/usb/drivers/mpro/*)
-USBDEV=${USBDEV%/*}    # poista interface-pääte (esim. ":1.0")
+### Configuration
 
-cat $USBDEV/power/runtime_status   # active | suspended
-cat $USBDEV/power/control          # auto | on
-```
+The idle delay can be set at module load time:
 
-If `control` reads `on`, suspend is disabled. To enable it:
+    options mpro idle_delay_ms=60000     # 60-second idle delay
+    options mpro idle_delay_ms=0          # disable virtual idle
 
-```sh
-echo auto > $USBDEV/power/control
-```
+Or at runtime via sysfs:
 
-`auto` is the default on most systems, but some power-management tools
-(TLP, laptop-mode) may override it.
+    echo 60000 > /sys/bus/usb/drivers/mpro/<id>/idle_delay_ms
+
+### Status
+
+    cat /sys/bus/usb/drivers/mpro/<id>/idle_state        # active|idle
+    cat /sys/bus/usb/drivers/mpro/<id>/active_refs       # number of holders
+
+### Manual control
+
+    echo idle > /sys/bus/usb/drivers/mpro/<id>/idle_state    # force idle now
+    echo active > /sys/bus/usb/drivers/mpro/<id>/idle_state  # force active now
+
+### fbdev console mode
+
+When `fbdev=1` is set, the kernel text console keeps the display
+pipe permanently active. The idle timer is disabled in this mode —
+the console remains visible until userspace explicitly switches
+modes.
 
 ## Troubleshooting
 

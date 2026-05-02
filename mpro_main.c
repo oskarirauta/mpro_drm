@@ -12,8 +12,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/pm.h>
-#include <linux/pm_runtime.h>
 #include <linux/lz4.h>
 
 #include "mpro_internal.h"
@@ -44,63 +42,12 @@ MODULE_PARM_DESC(lz4_threshold,
 	"(default: 1024). Frames smaller than this are sent uncompressed "
 	"because the compression overhead outweighs the bandwidth saved.");
 
-/* ------------------------------------------------------------------ */
-/* PM                                                                 */
-/* ------------------------------------------------------------------ */
-
-static int mpro_usb_suspend(struct usb_interface *intf, pm_message_t msg)
-{
-	struct mpro_device *mpro = usb_get_intfdata(intf);
-
-	if (!mpro)
-		return 0;
-
-	dev_dbg(&intf->dev, "USB suspend\n");
-
-	/*
-	 * No "enter sleep" opcode is documented — the device simply stops
-	 * at the USB level. By the time we get here the DRM pipe has
-	 * already pushed a black frame and the backlight has been turned
-	 * off through the screen_off listener.
-	 */
-
-	return 0;
-}
-
-static int mpro_usb_resume(struct usb_interface *intf)
-{
-	struct mpro_device *mpro = usb_get_intfdata(intf);
-
-	if (!mpro)
-		return 0;
-
-	dev_dbg(&intf->dev, "USB resume\n");
-
-	/*
-	 * mpro_send_command() uses usb_control_msg_send(), which kmemdups
-	 * the buffer internally — a stack buffer is fine here.
-	 */
-	mpro_send_command(mpro, cmd_quit_sleepmode, sizeof(cmd_quit_sleepmode));
-	return 0;
-}
-
-void mpro_autopm_put_interface(struct mpro_device *mpro)
-{
-	if (mpro->fbdev_enabled)
-		return;
-
-	usb_autopm_put_interface(mpro->intf);
-}
-EXPORT_SYMBOL_GPL(mpro_autopm_put_interface);
-
-int mpro_autopm_get_interface(struct mpro_device *mpro)
-{
-	if (mpro->fbdev_enabled)
-		return 0;
-
-	return usb_autopm_get_interface(mpro->intf);
-}
-EXPORT_SYMBOL_GPL(mpro_autopm_get_interface);
+static unsigned int mpro_idle_delay_ms = 30000;
+module_param_named(idle_delay_ms, mpro_idle_delay_ms, uint, 0644);
+MODULE_PARM_DESC(idle_delay_ms,
+	"Time in milliseconds of inactivity before the display goes "
+	"idle (backlight off, touch URB stopped). 0 = disabled. "
+	"Default: 30000.");
 
 /* ------------------------------------------------------------------ */
 /* MFD cells                                                          */
@@ -325,14 +272,20 @@ static int mpro_usb_probe(struct usb_interface *intf,
 		return dev_err_probe(dev, ret, "MFD register failed\n");
 	}
 
-	/* Autosuspend, unless fbdev is keeping the pipe permanently on */
-	if (!mpro->fbdev_enabled) {
-		pm_runtime_set_autosuspend_delay(&mpro->udev->dev, 30000);
-		pm_runtime_use_autosuspend(&mpro->udev->dev);
-		dev_info(dev, "USB autosuspend enabled (delay 30s)\n");
-	} else {
-		dev_info(dev, "fbdev console mode: USB autosuspend disabled\n");
-	}
+	/*
+	 * Initialise virtual idle state. The device firmware does not
+	 * support a working USB-bus resume, so real autosuspend cannot be
+	 * used. Instead we track child activity and turn the backlight off
+	 * after a configurable idle period — see mpro_pm.c for details.
+	 */
+	mpro->idle_delay_ms = mpro_idle_delay_ms;
+	mpro_pm_init(mpro);
+
+	if (mpro->idle_delay_ms > 0)
+		dev_info(dev, "Virtual idle enabled (delay %u ms)\n",
+			 mpro->idle_delay_ms);
+	else
+		dev_info(dev, "Virtual idle disabled\n");
 
 	dev_info(dev, "MPRO MFD driver registered\n");
 	return 0;
@@ -355,6 +308,9 @@ static void mpro_usb_disconnect(struct usb_interface *intf)
 	spin_lock_irqsave(&mpro->state_lock, flags);
 	mpro->running = false;
 	spin_unlock_irqrestore(&mpro->state_lock, flags);
+
+	/* Cancel any pending idle work before children start tearing down */
+	mpro_pm_shutdown(mpro);
 
 	/*
 	 * Unplug the DRM device before the MFD children are torn down.
@@ -395,10 +351,7 @@ static struct usb_driver mpro_usb_driver = {
 	.name			= "mpro",
 	.probe			= mpro_usb_probe,
 	.disconnect		= mpro_usb_disconnect,
-	.suspend		= mpro_usb_suspend,
-	.resume			= mpro_usb_resume,
-	.reset_resume		= mpro_usb_resume,
-	.supports_autosuspend	= 1,
+	.supports_autosuspend	= 0,
 	.id_table		= id_table,
 };
 

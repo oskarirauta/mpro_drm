@@ -10,5 +10,6 @@ mpro-y := mpro_main.o     \
           mpro_pipeline.o \
           mpro_model.o    \
           mpro_screen.o   \
-          mpro_sysfs.o    \
-          mpro_color.o
+          mpro_pm.o       \
+          mpro_color.o    \
+          mpro_sysfs.o

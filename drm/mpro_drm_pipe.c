@@ -308,7 +308,7 @@ static void mpro_drm__pipe_disable(struct drm_simple_display_pipe *pipe)
 	drm_crtc_vblank_off(&mdrm->pipe.crtc);
 
 	mpro_screen_notify_off(mdrm->mpro);
-	mpro_autopm_put_interface(mdrm->mpro);
+	mpro_active_put(mdrm->mpro, &mdrm->active_held);
 }
 
 static void mpro_drm__pipe_enable(struct drm_simple_display_pipe *pipe,
@@ -321,7 +321,7 @@ static void mpro_drm__pipe_enable(struct drm_simple_display_pipe *pipe,
 	struct drm_rect rect;
 	bool was_blanked = mdrm->blanked;
 
-	mpro_autopm_get_interface(mdrm->mpro);
+	mpro_active_get(mdrm->mpro, &mdrm->active_held);
 	mdrm->blanked = false;
 
 	/*

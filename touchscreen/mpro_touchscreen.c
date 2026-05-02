@@ -289,7 +289,7 @@ static int mpro_ts__input_open(struct input_dev *input)
 {
 	struct mpro_touch *mt = input_get_drvdata(input);
 
-	mpro_autopm_get_interface(mt->mpro);
+	mpro_active_get(mt->mpro, &mt->pm_active);
 
 	mutex_lock(&mt->lock);
 	mt->opened = true;
@@ -326,7 +326,7 @@ static void mpro_ts__input_close(struct input_dev *input)
 	input_sync(input);
 	mt->any_active = false;
 
-	mpro_autopm_put_interface(mt->mpro);
+	mpro_active_put(mt->mpro, &mt->pm_active);
 }
 
 /* ------------------------------------------------------------------ */

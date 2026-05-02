@@ -230,6 +230,72 @@ static ssize_t fw_major_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(fw_major);
 
+/* ------------------------------------------------------------------ */
+/* Idle / power-management attributes                                 */
+/* ------------------------------------------------------------------ */
+
+static ssize_t idle_delay_ms_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", READ_ONCE(mpro->idle_delay_ms));
+}
+
+static ssize_t idle_delay_ms_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	unsigned int val;
+
+	if (kstrtouint(buf, 10, &val))
+		return -EINVAL;
+
+	WRITE_ONCE(mpro->idle_delay_ms, val);
+	return count;
+}
+static DEVICE_ATTR_RW(idle_delay_ms);
+
+static ssize_t idle_state_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+	bool is_idle;
+
+	mutex_lock(&mpro->listeners_lock);
+	is_idle = mpro->is_idle;
+	mutex_unlock(&mpro->listeners_lock);
+
+	return sysfs_emit(buf, "%s\n", is_idle ? "idle" : "active");
+}
+
+static ssize_t idle_state_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+
+	if (sysfs_streq(buf, "idle"))
+		mpro_pm_force_idle(mpro);
+	else if (sysfs_streq(buf, "active"))
+		mpro_pm_force_active(mpro);
+	else
+		return -EINVAL;
+
+	return count;
+}
+static DEVICE_ATTR_RW(idle_state);
+
+static ssize_t active_refs_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct mpro_device *mpro = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", atomic_read(&mpro->active_refs));
+}
+static DEVICE_ATTR_RO(active_refs);
+
 static ssize_t fps_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
@@ -350,6 +416,9 @@ static struct attribute *mpro_attrs[] = {
 	&dev_attr_firmware.attr,
 	&dev_attr_fw_minor.attr,
 	&dev_attr_fw_major.attr,
+	&dev_attr_idle_delay_ms.attr,
+	&dev_attr_idle_state.attr,
+	&dev_attr_active_refs.attr,
 	&dev_attr_fps.attr,
 	&dev_attr_stats.attr,
 	&dev_attr_reset_stats.attr,

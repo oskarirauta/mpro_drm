@@ -120,10 +120,16 @@ struct mpro_device {
 	atomic_t stats_displayed;
 	atomic_t stats_dropped;
 
-	/* min frame size to compress */
-	atomic64_t last_frame_ns; /* edellisen framen aikaleima */
-	u32 ewma_period_ns;	  /* EWMA jiffies-deltasta */
-	spinlock_t fps_lock;	  /* suojaa ewma:a */
+	/* Virtual idle management (mpro_pm.c) */
+	struct delayed_work	idle_work;
+	atomic_t		active_refs;	/* references from children */
+	bool			is_idle;	/* protected by listeners_lock */
+	u32			idle_delay_ms;	/* 0 = disabled */
+
+	/* FPS tracking — EWMA of inter-frame deltas */
+	atomic64_t last_frame_ns; /* timestamp of last frame */
+	u32 ewma_period_ns;	  /* EWMA from jiffies-delta */
+	spinlock_t fps_lock;	  /* protects ewma */
 };
 
 /* ------------------------------------------------------------------ */
@@ -158,7 +164,7 @@ int mpro_send_full_frame(struct mpro_device *mpro,
 int mpro_send_partial_frame(struct mpro_device *mpro,
 			    const void *data, u16 x, u16 y, u16 w, u16 h);
 
-/* Internal pipeline init/shutdown (called from mpro_core.c) */
+/* Internal pipeline init/shutdown (called from mpro_main.c) */
 void mpro_io_init(struct mpro_device *mpro);
 void mpro_io_shutdown(struct mpro_device *mpro);
 
@@ -166,9 +172,13 @@ void mpro_io_shutdown(struct mpro_device *mpro);
 int mpro_get_model(struct mpro_device *mpro);
 int mpro_sysfs_add(struct mpro_device *mpro);
 
-/* Power management */
-void mpro_autopm_put_interface(struct mpro_device *mpro);
-int  mpro_autopm_get_interface(struct mpro_device *mpro);
+/* Power management — virtual idle state (mpro_pm.c) */
+void mpro_pm_init(struct mpro_device *mpro);
+void mpro_pm_shutdown(struct mpro_device *mpro);
+void mpro_active_get(struct mpro_device *mpro, bool *held);
+void mpro_active_put(struct mpro_device *mpro, bool *held);
+void mpro_pm_force_idle(struct mpro_device *mpro);
+void mpro_pm_force_active(struct mpro_device *mpro);
 
 /* Screen state listeners (mpro_screen.c) */
 int  mpro_screen_listener_register(struct mpro_device *mpro,
