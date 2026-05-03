@@ -6,4 +6,9 @@ tests/*.mp4
 *.mod
 *.mod.c
 *.mod.o
+.*.o.cmd
+.*.o
+.*.mod.cmd
+.*.mod.o.cmd
+.*.o.d
 modules.order
