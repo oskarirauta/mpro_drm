@@ -11,4 +11,8 @@ tests/*.mp4
 .*.mod.cmd
 .*.mod.o.cmd
 .*.o.d
+.*.ko.cmd
+.Module.symvers.cmd
+.modules.order.cmd
+Module.symvers
 modules.order
