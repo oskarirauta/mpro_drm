@@ -298,6 +298,8 @@ static int mpro_drm__probe(struct platform_device *pdev)
 	if (ret)
 		drm_warn(drm, "Failed to initialize vblank: %d\n", ret);
 
+	mutex_init(&mdrm->lut_lock);
+
 	hrtimer_setup(&mdrm->vblank_timer, mpro_drm__vblank_timer,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 

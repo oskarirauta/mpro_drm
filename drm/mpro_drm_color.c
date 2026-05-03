@@ -28,6 +28,7 @@
 /* Gamma curve                                                        */
 /* ------------------------------------------------------------------ */
 
+/* always called with mutex lut_lock locked */
 void mpro_drm__rebuild_combined_lut(struct mpro_drm *mdrm)
 {
 	u32 b = mdrm->brightness;
@@ -49,21 +50,25 @@ void mpro_drm__build_power_lut(struct mpro_drm *mdrm, u32 g_x100)
 {
 	int i;
 
+	mutex_lock(&mdrm->lut_lock);
+
 	if (g_x100 == 100) {
 		mdrm->gamma_valid = false;
-		mpro_drm__rebuild_combined_lut(mdrm);
-		return;
+	} else {
+
+		for (i = 0; i < 256; i++) {
+			u8 v = mpro_pow_lut(i, g_x100);
+
+			mdrm->lut[0][i] = v;
+			mdrm->lut[1][i] = v;
+			mdrm->lut[2][i] = v;
+		}
+
+		mdrm->gamma_valid = true;
 	}
 
-	for (i = 0; i < 256; i++) {
-		u8 v = mpro_pow_lut(i, g_x100);
-
-		mdrm->lut[0][i] = v;
-		mdrm->lut[1][i] = v;
-		mdrm->lut[2][i] = v;
-	}
-	mdrm->gamma_valid = true;
 	mpro_drm__rebuild_combined_lut(mdrm);
+	mutex_unlock(&mdrm->lut_lock);
 }
 
 void mpro_drm__apply_color_mgmt(struct mpro_drm *mdrm,
@@ -75,19 +80,25 @@ void mpro_drm__apply_color_mgmt(struct mpro_drm *mdrm,
 	if (!crtc_state->color_mgmt_changed)
 		return;
 
+	mutex_lock(&mdrm->lut_lock);
+
 	if (!crtc_state->gamma_lut) {
 		mdrm->gamma_valid = false;
-		return;
+	} else {
+
+		lut = (struct drm_color_lut *)crtc_state->gamma_lut->data;
+
+		for (i = 0; i < 256; i++) {
+			mdrm->lut[0][i] = drm_color_lut_extract(lut[i].red,   8);
+			mdrm->lut[1][i] = drm_color_lut_extract(lut[i].green, 8);
+			mdrm->lut[2][i] = drm_color_lut_extract(lut[i].blue,  8);
+		}
+
+		mdrm->gamma_valid = true;
 	}
 
-	lut = (struct drm_color_lut *)crtc_state->gamma_lut->data;
-	for (i = 0; i < 256; i++) {
-		mdrm->lut[0][i] = drm_color_lut_extract(lut[i].red,   8);
-		mdrm->lut[1][i] = drm_color_lut_extract(lut[i].green, 8);
-		mdrm->lut[2][i] = drm_color_lut_extract(lut[i].blue,  8);
-	}
-	mdrm->gamma_valid = true;
 	mpro_drm__rebuild_combined_lut(mdrm);
+	mutex_unlock(&mdrm->lut_lock);
 }
 
 /* ------------------------------------------------------------------ */
@@ -236,9 +247,15 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 	u32 dst_pitch = mdrm->width * 2;
 	u16 *temp_buffer = NULL;
 	u16 *final_dst;
-	bool needs_rotation    = (mdrm->rotation != DRM_MODE_ROTATE_0);
-	bool transform_needed  = mdrm->gamma_valid ||
-				 mdrm->brightness < MPRO_BRIGHTNESS_MAX;
+	u8 lut_local[3][256];
+
+	bool needs_rotation	= (mdrm->rotation != DRM_MODE_ROTATE_0);
+	bool transform_needed	= mdrm->gamma_valid ||
+			mdrm->brightness < MPRO_BRIGHTNESS_MAX;
+
+	mutex_lock(&mdrm->lut_lock);
+	memcpy(lut_local, mdrm->lut_combined, sizeof(lut_local));
+	mutex_unlock(&mdrm->lut_lock);
 
 	if (clip->x2 > (int)mdrm->width || clip->y2 > (int)mdrm->height ||
 	    clip->x1 < 0 || clip->y1 < 0)
@@ -274,7 +291,7 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 		mpro_drm__copy_rgb565((u8 *)final_dst, src_ptr,
 				      width, height,
 				      dst_pitch, fb->pitches[0],
-				      (const u8 (*)[256])mdrm->lut_combined,
+				      (const u8 (*)[256])lut_local,
 				      transform_needed);
 		break;
 
@@ -293,7 +310,7 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 				(u32 *)src_ptr,
 				width, height,
 				dst_pitch, fb->pitches[0],
-				(const u8 (*)[256])mdrm->lut_combined,
+				(const u8 (*)[256])lut_local,
 				transform_needed);
 		break;
 

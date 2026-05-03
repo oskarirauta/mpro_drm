@@ -78,11 +78,14 @@ static ssize_t gamma_lut_write(struct file *f, struct kobject *kobj,
 	if (off != 0 || count != MPRO_DRM_LUT_SIZE)
 		return -EINVAL;
 
+	mutex_lock(&mdrm->lut_lock);
 	memcpy(mdrm->lut[0], buf,       256);
 	memcpy(mdrm->lut[1], buf + 256, 256);
 	memcpy(mdrm->lut[2], buf + 512, 256);
 	mdrm->gamma_valid = true;
 	mpro_drm__rebuild_combined_lut(mdrm);
+	mutex_unlock(&mdrm->lut_lock);
+
 	return count;
 }
 static const BIN_ATTR_WO(gamma_lut, MPRO_DRM_LUT_SIZE);
@@ -144,8 +147,11 @@ static ssize_t brightness_store(struct device *dev,
 	if (val > MPRO_BRIGHTNESS_MAX)
 		return -EINVAL;
 
+	mutex_lock(&mdrm->lut_lock);
 	mdrm->brightness = val;
 	mpro_drm__rebuild_combined_lut(mdrm);
+	mutex_unlock(&mdrm->lut_lock);
+
 	return count;
 }
 static DEVICE_ATTR_RW(brightness);

@@ -81,6 +81,7 @@ struct mpro_drm {
 	u32				brightness;	  /* 0..MPRO_BRIGHTNESS_MAX */
 	struct drm_property		*brightness_prop;
 	u32				gamma_x100;	  /* gamma * 100 */
+	struct mutex			lut_lock;
 
 	bool				blanked;
 	bool				disable_partial;
