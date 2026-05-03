@@ -258,6 +258,36 @@ static void mpro_drm__crtc_disable_vblank(struct drm_simple_display_pipe *pipe)
 /* ------------------------------------------------------------------ */
 
 /*
+ * Arm the pending page-flip event to fire on the NEXT vblank interrupt.
+ *
+ * drm_crtc_arm_vblank_event() internally calls drm_vblank_get(), which
+ * starts the hrtimer if it isn't already running, and puts a reference
+ * that is released automatically when the event fires.  The event
+ * timestamp therefore always comes from an actual hrtimer fire — never
+ * from drm_reset_vblank_timestamp() or a stale counter — so it is
+ * guaranteed to be monotonically non-decreasing from Weston's
+ * weston_output_finish_frame() perspective.
+ *
+ * While the event is armed, Weston sees a "pending page flip" and will
+ * NOT call weston_output_finish_frame(now) from start_repaint_loop().
+ * This eliminates the race that caused:
+ *   Assertion failed: timespec_sub_to_nsec(stamp, &output->frame_time) >= 0
+ */
+static void mpro_drm__arm_pageflip(struct drm_simple_display_pipe *pipe)
+{
+	struct drm_crtc *crtc = &pipe->crtc;
+	struct drm_pending_vblank_event *event;
+
+	spin_lock_irq(&crtc->dev->event_lock);
+	event = crtc->state->event;
+	if (event) {
+		crtc->state->event = NULL;
+		drm_crtc_arm_vblank_event(crtc, event);
+	}
+	spin_unlock_irq(&crtc->dev->event_lock);
+}
+
+/*
  * Consume the CRTC's vblank event whenever an atomic commit completes,
  * including the fb=NULL (rmfb) path. Otherwise the DRM core warns:
  *   drm_atomic_helper_commit_hw_done: crtc_state->event != NULL
@@ -351,11 +381,12 @@ static void mpro_drm__pipe_enable(struct drm_simple_display_pipe *pipe,
 	mpro_screen_notify_on(mdrm->mpro);
 
 	/*
-	 * Modeset-level vblank event: if the commit carried an event and
-	 * pipe_update won't run, deliver it here. Frame-level events go
-	 * through pipe_update().
+	 * Arm rather than send immediately: drm_crtc_arm_vblank_event()
+	 * starts the hrtimer (via drm_vblank_get) and the event fires on
+	 * the first actual timer interrupt.  This prevents start_repaint_loop
+	 * from advancing frame_time past the event's timestamp.
 	 */
-	mpro_drm__finish_pageflip(pipe);
+	mpro_drm__arm_pageflip(pipe);
 }
 
 static void mpro_drm__pipe_update(struct drm_simple_display_pipe *pipe,
@@ -413,7 +444,11 @@ static void mpro_drm__pipe_update(struct drm_simple_display_pipe *pipe,
 		}
 	}
 
-	mpro_drm__finish_pageflip(pipe);
+	/*
+	 * Arm the flip event for the next vblank, not the last one.
+	 * See mpro_drm__arm_pageflip() for the full rationale.
+	 */
+	mpro_drm__arm_pageflip(pipe);
 }
 
 static int mpro_drm__crtc_atomic_check(struct drm_simple_display_pipe *pipe,
