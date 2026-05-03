@@ -75,7 +75,7 @@ static ssize_t gamma_lut_write(struct file *f, struct kobject *kobj,
 {
 	struct mpro_drm *mdrm = dev_get_drvdata(kobj_to_dev(kobj));
 
-	if (off != 0 || count != 768)
+	if (off != 0 || count != MPRO_DRM_LUT_SIZE)
 		return -EINVAL;
 
 	memcpy(mdrm->lut[0], buf,       256);
