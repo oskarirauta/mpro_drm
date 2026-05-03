@@ -248,12 +248,12 @@ int mpro_drm__copy_frame(struct mpro_drm *mdrm, struct iosys_map *src,
 	u16 *temp_buffer = NULL;
 	u16 *final_dst;
 	u8 lut_local[3][256];
-
-	bool needs_rotation	= (mdrm->rotation != DRM_MODE_ROTATE_0);
-	bool transform_needed	= mdrm->gamma_valid ||
-			mdrm->brightness < MPRO_BRIGHTNESS_MAX;
+	bool needs_rotation, transform_needed;
 
 	mutex_lock(&mdrm->lut_lock);
+	needs_rotation = (mdrm->rotation != DRM_MODE_ROTATE_0);
+	transform_needed = mdrm->gamma_valid ||
+			mdrm->brightness < MPRO_BRIGHTNESS_MAX;
 	memcpy(lut_local, mdrm->lut_combined, sizeof(lut_local));
 	mutex_unlock(&mdrm->lut_lock);
 
